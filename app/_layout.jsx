@@ -133,7 +133,9 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="Login" options={{ headerShown: false }} />
+        <Stack.Screen name="SignUp" options={{ headerShown: false }} />
         <Stack.Screen name="AccountSetup" options={{ headerShown: false }} />
+        <Stack.Screen name="PreferredRoutesSetup" options={{ headerShown: false }} />
         <Stack.Screen name="Home" options={{ title: "" }} />
         <Stack.Screen name="Profile" options={{ title: "Profile" }} />
         <Stack.Screen name="Parcels" options={{ title: "Parcels" }} />

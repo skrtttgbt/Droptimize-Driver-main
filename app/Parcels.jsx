@@ -1,49 +1,22 @@
-import { useState } from "react";
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { collection, getDocs, query, where } from "firebase/firestore";
+import { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import ParcelDetailsModal from "../components/ParcelDetailsModal";
-
-const initialParcels = [
-  {
-    ParcelID: "P001",
-    Reference: "REF123",
-    Recipient: "Juan Dela Cruz",
-    FullAddress: "123 Sample St, Barangay 123, Manila",
-    Barangay: "Barangay 123",
-    City: "Manila",
-    Province: "Metro Manila",
-    PostalCode: "1000",
-    Contact: "9876543219",
-    CODAmount: 500,
-    Weight: "2kg",
-    Status: "To Deliver",
-    DateAdded: "2025-09-10",
-    Courier: "J&T",
-    Notes: "Handle with care",
-  },
-  {
-    ParcelID: "P002",
-    Reference: "REF456",
-    Recipient: "Maria Santos",
-    FullAddress: "456 Example Rd, Barangay 456, Quezon City",
-    Barangay: "Barangay 456",
-    City: "Quezon City",
-    Province: "Metro Manila",
-    PostalCode: "1100",
-    Contact: "9123456789",
-    CODAmount: 1200,
-    Weight: "3kg",
-    Status: "Delivered",
-    DateAdded: "2025-09-11",
-    Courier: "LBC",
-    Notes: "Leave at front desk",
-  },
-];
-
+import { auth, db } from "../firebaseConfig";
 export default function Parcels() {
   const [selectedTab, setSelectedTab] = useState("toDeliver");
-  const [parcels, setParcels] = useState(initialParcels);
+  const [parcels, setParcels] = useState([]);
   const [selectedParcel, setSelectedParcel] = useState(null);
   const [historyFilter, setHistoryFilter] = useState("All");
+  const [loading, setLoading] = useState(true);
 
   const statusColors = {
     "To Deliver": "#ff9914",
@@ -51,6 +24,42 @@ export default function Parcels() {
     Failed: "#f21b3f",
     Cancelled: "#f21b3f",
   };
+
+
+useEffect(() => {
+  const fetchParcels = async () => {
+    try {
+      const user = auth.currentUser;
+      if (!user) {
+        setLoading(false);
+        return; 
+      }
+
+      const parcelsRef = collection(db, "parcels");
+      const q = query(parcelsRef, where("driverUid", "==", user.uid));
+      const snapshot = await getDocs(q);
+
+      if (snapshot.empty) {
+        console.log("No parcels found for this driver.");
+        setParcels([]); 
+      } else {
+        const fetchedParcels = snapshot.docs.map((doc) => ({
+          ParcelID: doc.id,
+          ...doc.data(),
+        }));
+        setParcels(fetchedParcels);
+      }
+    } catch (error) {
+      console.error("Error fetching parcels:", error);
+      Alert.alert("Error", "An error occurred while fetching parcels. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  fetchParcels();
+}, []);
+
 
   const handleUpdateStatus = (parcelId, newStatus) => {
     setParcels((prev) =>
@@ -60,7 +69,7 @@ export default function Parcels() {
     );
   };
 
-  // Filtering logic
+
   const filteredParcels = parcels.filter((p) => {
     if (selectedTab === "toDeliver") {
       return p.Status === "To Deliver";
@@ -71,6 +80,15 @@ export default function Parcels() {
       return p.Status === historyFilter;
     }
   });
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+        <ActivityIndicator size="large" color="#00b2e1" />
+        <Text style={{ marginTop: 10 }}>Loading parcels...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -148,30 +166,36 @@ export default function Parcels() {
       )}
 
       {/* Parcel List */}
-      <FlatList
-        data={filteredParcels}
-        keyExtractor={(item) => item.ParcelID}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.parcelCard}
-            onPress={() => setSelectedParcel(item)}
-          >
-            <View style={styles.cardHeader}>
-              <Text style={styles.parcelName}>{item.Recipient}</Text>
-              <View
-                style={[
-                  styles.statusBadge,
-                  { backgroundColor: statusColors[item.Status] || "#ccc" },
-                ]}
-              >
-                <Text style={styles.statusText}>{item.Status}</Text>
+      {filteredParcels.length === 0 ? (
+        <Text style={{ textAlign: "center", marginTop: 20, color: "#777" }}>
+          No parcels found.
+        </Text>
+      ) : (
+        <FlatList
+          data={filteredParcels}
+          keyExtractor={(item) => item.ParcelID}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={styles.parcelCard}
+              onPress={() => setSelectedParcel(item)}
+            >
+              <View style={styles.cardHeader}>
+                <Text style={styles.parcelName}>{item.Recipient}</Text>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    { backgroundColor: statusColors[item.Status] || "#ccc" },
+                  ]}
+                >
+                  <Text style={styles.statusText}>{item.Status}</Text>
+                </View>
               </View>
-            </View>
-            <Text style={styles.parcelText}>{item.FullAddress}</Text>
-            <Text style={styles.parcelText}>{item.Contact}</Text>
-          </TouchableOpacity>
-        )}
-      />
+              <Text style={styles.parcelText}>{item.FullAddress}</Text>
+              <Text style={styles.parcelText}>{item.Contact}</Text>
+            </TouchableOpacity>
+          )}
+        />
+      )}
 
       {/* Modal */}
       <ParcelDetailsModal
@@ -185,22 +209,14 @@ export default function Parcels() {
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: "#fff", 
-    padding: 10 
-  },
+  container: { flex: 1, backgroundColor: "#fff", padding: 10 },
   tabContainer: {
     flexDirection: "row",
     borderRadius: 8,
     overflow: "hidden",
     marginBottom: 10,
   },
-  tab: { 
-    flex: 1, 
-    alignItems: "center", 
-    paddingVertical: 12 
-  },
+  tab: { flex: 1, alignItems: "center", paddingVertical: 12 },
   filterContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
@@ -229,22 +245,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  parcelName: { 
-    fontSize: 16, 
-    fontWeight: "bold" 
-  },
-  parcelText: { 
-    fontSize: 14, 
-    marginTop: 2 
-  },
+  parcelName: { fontSize: 16, fontWeight: "bold" },
+  parcelText: { fontSize: 14, marginTop: 2 },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
-  statusText: { 
-    color: "#fff", 
-    fontWeight: "bold", 
-    fontSize: 12 
-  },
+  statusText: { color: "#fff", fontWeight: "bold", fontSize: 12 },
 });

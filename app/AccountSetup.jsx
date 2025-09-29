@@ -33,64 +33,70 @@ export default function AccountVehicleSetup() {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleSubmit = async () => {
-    const newErrors = {};
-    if (!formData.address.trim()) newErrors.address = "Address is required";
-    if (!formData.phoneNumber.trim()) newErrors.phoneNumber = "Phone number is required";
-    if (!formData.joinCode.trim()) newErrors.joinCode = "Join code is required";
-    if (!formData.plateNumber.trim()) newErrors.plateNumber = "Plate number is required";
-    if (!vehicleType) newErrors.vehicleType = "Vehicle type is required";
-    if (!formData.model.trim()) newErrors.model = "Vehicle model is required";
+const handleSubmit = async () => {
+  const newErrors = {};
+  if (!formData.address.trim()) newErrors.address = "Address is required";
+  if (!formData.phoneNumber.trim()) newErrors.phoneNumber = "Phone number is required";
+  if (!formData.joinCode.trim()) newErrors.joinCode = "Join code is required";
+  if (!formData.plateNumber.trim()) newErrors.plateNumber = "Plate number is required";
+  if (!vehicleType) newErrors.vehicleType = "Vehicle type is required";
+  if (!formData.model.trim()) newErrors.model = "Vehicle model is required";
 
-    setErrors(newErrors);
-    if (Object.keys(newErrors).length > 0) return;
+  setErrors(newErrors);
+  if (Object.keys(newErrors).length > 0) return;
 
-    setLoading(true);
-    try {
-      const currentUser = auth.currentUser;
-      if (!currentUser) {
-        setErrors({ general: "User not authenticated. Please log in again." });
-        setLoading(false);
-        router.replace("/Login");
-        return;
-      }
-
-      // Verify branch exists
-      const branchRef = doc(db, "branches", formData.joinCode);
-      const branchSnap = await getDoc(branchRef);
-      if (!branchSnap.exists()) {
-        setErrors({ joinCode: "Invalid join code" });
-        setLoading(false);
-        return;
-      }
-
-      const userRef = doc(db, "users", currentUser.uid);
-
-      // Save all vehicle & account info
-      await setDoc(
-        userRef,
-        {
-          address: formData.address,
-          phoneNumber: formData.phoneNumber,
-          branchId: branchRef.id,
-          plateNumber: formData.plateNumber,
-          vehicleType,
-          model: formData.model,
-          accountSetupComplete: true,
-          vehicleSetupComplete: true,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      router.replace("/Home");
-    } catch (err) {
-      console.error("Error saving setup:", err);
-      setErrors({ general: "Failed to save data. Try again." });
-    } finally {
+  setLoading(true);
+  try {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setErrors({ general: "User not authenticated. Please log in again." });
       setLoading(false);
+      router.replace("/Login");
+      return;
     }
-  };
+
+    const branchRef = doc(db, "branches", formData.joinCode);
+    const branchSnap = await getDoc(branchRef);
+    if (!branchSnap.exists()) {
+      setErrors({ joinCode: "Invalid join code" });
+      setLoading(false);
+      return;
+    }
+
+    const userRef = doc(db, "users", currentUser.uid);
+
+    await setDoc(
+      userRef,
+      {
+        address: formData.address,
+        phoneNumber: formData.phoneNumber,
+        branchId: branchRef.id,
+        plateNumber: formData.plateNumber,
+        vehicleType,
+        model: formData.model,
+        accountSetupComplete: true,
+        vehicleSetupComplete: true,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    const updatedUserSnap = await getDoc(userRef);
+    const userData = updatedUserSnap.data();
+
+    if (userData?.preferredRoutes && userData.preferredRoutes.length > 0) {
+      router.replace("/Home");  
+    } else {
+      router.replace("/PreferredRoutesSetup"); 
+    }
+  } catch (err) {
+    console.error("Error saving setup:", err);
+    setErrors({ general: "Failed to save data. Try again." });
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
@@ -143,9 +149,10 @@ export default function AccountVehicleSetup() {
         {errors.joinCode && <Text style={styles.errorText}>{errors.joinCode}</Text>}
         {errors.general && <Text style={styles.errorText}>{errors.general}</Text>}
 
-        <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Finish Setup</Text>}
-        </TouchableOpacity>
+          <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={loading}>
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Next</Text>}
+          </TouchableOpacity>
+
       </View>
     </KeyboardAvoidingView>
   );

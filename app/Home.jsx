@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import { doc, getDoc } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import { Dimensions, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
@@ -19,6 +20,11 @@ export default function Home() {
         const userRef = await getDoc(doc(db, "users", user.uid));
         setUserData(userRef.data());
       }
+      const userRefData  = userRef.data();
+      // Redirect based on preferredRoutes
+      if (!userRefData?.preferredRoutes || userRefData.preferredRoutes.length === 0) {
+        router.replace("/PreferredRoutesSetup"); 
+      }
     };
     fetchUserData();
   }, [user]);
@@ -26,7 +32,6 @@ export default function Home() {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Greeting OR Speedometer */}
         <View style={[styles.topSection, { minHeight: screenWidth * 0.6 }]}>
           {!shiftStarted ? (
             <>
