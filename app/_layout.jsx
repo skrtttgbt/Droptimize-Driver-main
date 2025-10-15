@@ -20,7 +20,7 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     "LEMONMILK-Bold": require("../assets/fonts/LEMONMILK-Bold.otf"),
   });
-
+  
   const [loading, setLoading] = useState(true);
   const [initialRoute, setInitialRoute] = useState("Login");
   const [userData, setUserData] = useState(null);

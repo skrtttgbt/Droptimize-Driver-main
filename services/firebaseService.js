@@ -1,4 +1,4 @@
-import { collection, getDocs, query, orderBy, doc, setDoc, Timestamp, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
 export const fetchAllParcels = async (uid = null) => {

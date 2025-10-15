@@ -42,7 +42,12 @@
       ],
       "expo-asset",
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow $(PRODUCT_NAME) to access your location.",
+          "locationWhenInUsePermission": "Allow $(PRODUCT_NAME) to access your location."
+        }
     ],
     "experiments": {
       "typedRoutes": true
