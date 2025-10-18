@@ -115,6 +115,11 @@ export default function Home() {
     setNextDelivery(null);
   };
 
+  // 🔹 New: Cancel button handler for "Available" state
+  const handleCancelShift = async () => {
+    await handleEndShift();
+  };
+
   if (loading)
     return (
       <View style={styles.loading}>
@@ -159,6 +164,7 @@ export default function Home() {
                   Available
                 </Text>
               </Text>
+
               {!hasParcels ? (
                 <Text style={styles.waitText}>
                   Waiting for parcels to be assigned...
@@ -176,6 +182,19 @@ export default function Home() {
                   )}
                 </TouchableOpacity>
               )}
+
+              {/* 🔹 Cancel Button */}
+              <TouchableOpacity
+                style={[styles.cancelButton, { width: screenWidth * 0.4 }]}
+                onPress={handleCancelShift}
+                disabled={buttonLoading}
+              >
+                {buttonLoading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.cancelText}>Cancel</Text>
+                )}
+              </TouchableOpacity>
             </View>
           )}
 
@@ -303,4 +322,17 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   endShiftText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  cancelButton: {
+    marginTop: 10,
+    height: 42,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f59e0b",
+    borderRadius: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  cancelText: { fontSize: 16, fontWeight: "600", color: "#fff" },
 });
