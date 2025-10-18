@@ -1,41 +1,67 @@
-import { useState } from "react";
-import { FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { doc, onSnapshot } from "firebase/firestore";
+import { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { auth, db } from "../firebaseConfig";
 
 export default function DrivingStats() {
   const [selectedTab, setSelectedTab] = useState("all");
   const [expandedDate, setExpandedDate] = useState(null);
+  const [drivingData, setDrivingData] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const allHistory = [
-    {
-      date: "2025-09-15",
-      stats: {
-        distance: "120 km",
-        avgSpeed: "45 km/h",
-        topSpeed: "95 km/h",
-        time: "6h 32m",
-      },
-      overspeeding: [
-        { location: "Main St., City Center", speed: "95 km/h" },
-        { location: "Highway 101", speed: "100 km/h" },
-      ],
-    },
-    {
-      date: "2025-09-14",
-      stats: {
-        distance: "80 km",
-        avgSpeed: "40 km/h",
-        topSpeed: "70 km/h",
-        time: "4h 10m",
-      },
-      overspeeding: [],
-    },
-  ];
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) {
+      Alert.alert("Not Logged In", "Please log in to see your driving stats.");
+      setLoading(false);
+      return;
+    }
 
-  const overspeedingHistory = allHistory.filter(
-    (h) => h.overspeeding.length > 0
+    const userRef = doc(db, "users", user.uid);
+
+    const unsubscribe = onSnapshot(
+      userRef,
+      (snapshot) => {
+        const data = snapshot.data();
+        if (data?.warnings && Array.isArray(data.warnings)) {
+          setDrivingData(data.warnings);
+        } else {
+          setDrivingData([]);
+        }
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Error fetching user warnings:", error);
+        Alert.alert("Error", "Failed to load driving stats.");
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  const overspeedingHistory = drivingData.filter(
+    (h) => h.overspeeding && h.overspeeding.length > 0
   );
 
-  const dataToShow = selectedTab === "all" ? allHistory : overspeedingHistory;
+  const dataToShow = selectedTab === "all" ? drivingData : overspeedingHistory;
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+        <ActivityIndicator size="large" color="#00b2e1" />
+        <Text style={{ marginTop: 10 }}>Loading driving stats...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -44,9 +70,7 @@ export default function DrivingStats() {
         <TouchableOpacity
           style={[
             styles.tab,
-            {
-              backgroundColor: selectedTab === "all" ? "#00b2e1" : "#e0e0e0",
-            },
+            { backgroundColor: selectedTab === "all" ? "#00b2e1" : "#e0e0e0" },
           ]}
           onPress={() => {
             setSelectedTab("all");
@@ -87,67 +111,70 @@ export default function DrivingStats() {
         </TouchableOpacity>
       </View>
 
-      {/* Driving History List */}
-      <FlatList
-        data={dataToShow}
-        keyExtractor={(item, index) => `${item.date}-${index}`}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.historyCard}
-            onPress={() =>
-              setExpandedDate(expandedDate === item.date ? null : item.date)
-            }
-          >
-            {/* Header Row */}
-            <View style={styles.cardHeader}>
-              <Text style={styles.dateText}>{item.date}</Text>
-              {item.overspeeding.length > 0 && (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>
-                    {item.overspeeding.length}x Overspeeding
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {/* Summary Stats when collapsed */}
-            {expandedDate !== item.date && (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryText}>
-                  Distance: {item.stats.distance}
-                </Text>
-                <Text style={styles.summaryText}>
-                  Top: {item.stats.topSpeed}
-                </Text>
-              </View>
-            )}
-
-            {/* Expanded Details */}
-            {expandedDate === item.date && (
-              <View style={styles.details}>
-                <Text style={styles.sectionTitle}>Stats</Text>
-                <Text>Distance: {item.stats.distance}</Text>
-                <Text>Avg Speed: {item.stats.avgSpeed}</Text>
-                <Text>Top Speed: {item.stats.topSpeed}</Text>
-                <Text>Time: {item.stats.time}</Text>
-
-                {item.overspeeding.length > 0 && (
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={styles.sectionTitle}>
-                      Overspeeding Instances
+      {/* Driving History */}
+      {dataToShow.length === 0 ? (
+        <Text style={{ textAlign: "center", marginTop: 20, color: "#777" }}>
+          No driving records found.
+        </Text>
+      ) : (
+        <FlatList
+          data={dataToShow}
+          keyExtractor={(item, index) => `${item.date}-${index}`}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={styles.historyCard}
+              onPress={() =>
+                setExpandedDate(expandedDate === item.date ? null : item.date)
+              }
+            >
+              <View style={styles.cardHeader}>
+                <Text style={styles.dateText}>{item.date}</Text>
+                {item.overspeeding?.length > 0 && (
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>
+                      {item.overspeeding.length}x Overspeeding
                     </Text>
-                    {item.overspeeding.map((o, i) => (
-                      <Text key={`${item.date}-os-${i}`}>
-                        • {o.location} — {o.speed}
-                      </Text>
-                    ))}
                   </View>
                 )}
               </View>
-            )}
-          </TouchableOpacity>
-        )}
-      />
+
+              {expandedDate !== item.date && (
+                <View style={styles.summaryRow}>
+                  <Text style={styles.summaryText}>
+                    Distance: {item.distance}
+                  </Text>
+                  <Text style={styles.summaryText}>
+                    Top: {item.topSpeed}
+                  </Text>
+                </View>
+              )}
+
+              {expandedDate === item.date && (
+                <View style={styles.details}>
+                  <Text style={styles.sectionTitle}>Stats</Text>
+                  <Text>Distance: {item.distance}</Text>
+                  <Text>Avg Speed: {item.avgSpeed}</Text>
+                  <Text>Top Speed: {item.topSpeed}</Text>
+                  <Text>Time: {item.time}</Text>
+
+                  {item.overspeeding?.length > 0 && (
+                    <View style={{ marginTop: 10 }}>
+                      <Text style={styles.sectionTitle}>
+                        Overspeeding Instances
+                      </Text>
+                      {item.overspeeding.map((o, i) => (
+                        <Text key={`${item.date}-os-${i}`}>
+                          • {o.location} — {o.speed}
+                        </Text>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+        />
+      )}
     </View>
   );
 }
@@ -172,7 +199,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 10,
     backgroundColor: "#f9f9f9",
-    // keep shadow simple for cross-platform
     shadowColor: "#000",
     shadowOpacity: 0.1,
     shadowOffset: { width: 0, height: 2 },

@@ -3,7 +3,7 @@ import { logoutUser } from "../firebaseConfig";
 
 export default function Navigation({ onNavigate }) {
   const handleNavigate = (path) => {
-    if (onNavigate) onNavigate(path); // pass the path to parent
+    if (onNavigate) onNavigate(path); 
   };
 
   const handleSignOut = () => {

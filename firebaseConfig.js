@@ -1,10 +1,24 @@
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 import { getApps, initializeApp } from "firebase/app";
-import { createUserWithEmailAndPassword, getAuth, getReactNativePersistence, initializeAuth, onAuthStateChanged, sendEmailVerification, signInWithEmailAndPassword, updateProfile } from "firebase/auth";
-import { doc, getDoc, getFirestore, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  createUserWithEmailAndPassword,
+  getAuth,
+  getReactNativePersistence,
+  initializeAuth,
+  onAuthStateChanged,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
+  updateProfile,
+} from "firebase/auth";
+import {
+  doc,
+  getDoc,
+  getFirestore,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
-// ------------------ Firebase Config ------------------
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -14,31 +28,22 @@ const firebaseConfig = {
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-// ------------------ Firebase Init ------------------
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 
-// Initialize Auth safely with ReactNativeAsyncStorage persistence
 let auth;
 try {
-  // Check if Auth is already initialized
   auth = initializeAuth(app, {
     persistence: getReactNativePersistence(ReactNativeAsyncStorage),
   });
-} catch (err) {
-  // If already initialized, reuse the existing Auth instance
-  const { getAuth } = require("firebase/auth");
+} catch {
   auth = getAuth(app);
 }
 
-// Firestore & Storage
 const db = getFirestore(app);
 const storage = getStorage(app);
 
 export { auth, db, ReactNativeAsyncStorage, storage };
 
-// ------------------ Auth Functions ------------------
-
-// Register user
 export const registerUser = async ({ email, password, firstName, lastName }) => {
   try {
     const { user } = await createUserWithEmailAndPassword(auth, email, password);
@@ -79,11 +84,9 @@ export const registerUser = async ({ email, password, firstName, lastName }) => 
   }
 };
 
-// Login user
 export const loginUser = async (email, password) => {
   try {
     const { user } = await signInWithEmailAndPassword(auth, email, password);
-
     await ReactNativeAsyncStorage.setItem(
       "user",
       JSON.stringify({
@@ -92,7 +95,6 @@ export const loginUser = async (email, password) => {
         displayName: user.displayName,
       })
     );
-
     return { success: true, user };
   } catch (error) {
     console.error("Login error:", error.message);
@@ -100,16 +102,13 @@ export const loginUser = async (email, password) => {
   }
 };
 
-// Check auth state
 export const checkAuth = () =>
   new Promise((resolve) => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       unsubscribe();
       if (!user) return resolve({ authenticated: false });
-
       const userDoc = await getDoc(doc(db, "users", user.uid)).catch(() => null);
       const userData = userDoc?.data() || {};
-
       resolve({
         authenticated: true,
         emailVerified: user.emailVerified,
@@ -123,7 +122,6 @@ export const checkAuth = () =>
     });
   });
 
-// Logout user
 export const logoutUser = async () => {
   try {
     await auth.signOut();
