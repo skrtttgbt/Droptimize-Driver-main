@@ -1,4 +1,4 @@
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import ParcelDetailsModal from "../components/ParcelDetailsModal";
 import { auth, db } from "../firebaseConfig";
+
 export default function Parcels() {
   const [selectedTab, setSelectedTab] = useState("toDeliver");
   const [parcels, setParcels] = useState([]);
@@ -20,64 +21,68 @@ export default function Parcels() {
 
   const statusColors = {
     "To Deliver": "#ff9914",
+    "Out for Delivery": "#ff9914",
     Delivered: "#29bf12",
-    Failed: "#f21b3f",
     Cancelled: "#f21b3f",
   };
 
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
-useEffect(() => {
-  const fetchParcels = async () => {
-    try {
-      const user = auth.currentUser;
-      if (!user) {
-        setLoading(false);
-        return; 
-      }
+    const parcelsRef = collection(db, "parcels");
+    const q = query(parcelsRef, where("driverUid", "==", user.uid));
 
-      const parcelsRef = collection(db, "parcels");
-      const q = query(parcelsRef, where("driverUid", "==", user.uid));
-      const snapshot = await getDocs(q);
-
-      if (snapshot.empty) {
-        console.log("No parcels found for this driver.");
-        setParcels([]); 
-      } else {
-        const fetchedParcels = snapshot.docs.map((doc) => ({
-          ParcelID: doc.id,
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const fetched = snapshot.docs.map((doc) => ({
+          parcelId: doc.id,
           ...doc.data(),
         }));
-        setParcels(fetchedParcels);
+        setParcels(fetched);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Error fetching parcels:", error);
+        Alert.alert("Error", "Unable to load parcels. Please try again.");
+        setLoading(false);
       }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleUpdateStatus = async (parcelId, newStatus) => {
+    try {
+      const parcelRef = doc(db, "parcels", parcelId);
+      await updateDoc(parcelRef, {
+        status: newStatus,
+        updatedAt: new Date(),
+      });
+      setParcels((prev) =>
+        prev.map((p) =>
+          p.parcelId === parcelId ? { ...p, status: newStatus } : p
+        )
+      );
+      Alert.alert("Success", `Parcel marked as ${newStatus}.`);
     } catch (error) {
-      console.error("Error fetching parcels:", error);
-      Alert.alert("Error", "An error occurred while fetching parcels. Please try again.");
-    } finally {
-      setLoading(false);
+      console.error("Error updating status:", error);
+      Alert.alert("Error", "Failed to update parcel status. Please try again.");
     }
   };
 
-  fetchParcels();
-}, []);
-
-
-  const handleUpdateStatus = (parcelId, newStatus) => {
-    setParcels((prev) =>
-      prev.map((p) =>
-        p.ParcelID === parcelId ? { ...p, Status: newStatus } : p
-      )
-    );
-  };
-
-
   const filteredParcels = parcels.filter((p) => {
     if (selectedTab === "toDeliver") {
-      return p.Status === "To Deliver";
+      return p.status === "To Deliver" || p.status === "Out for Delivery";
     } else {
       if (historyFilter === "All") {
-        return ["Delivered", "Cancelled", "Failed"].includes(p.Status);
+        return ["Delivered", "Cancelled"].includes(p.status);
       }
-      return p.Status === historyFilter;
+      return p.status === historyFilter;
     }
   });
 
@@ -110,6 +115,7 @@ useEffect(() => {
             To Deliver
           </Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[
             styles.tab,
@@ -131,12 +137,11 @@ useEffect(() => {
       {/* History Filter */}
       {selectedTab === "history" && (
         <View style={styles.filterContainer}>
-          {["All", "Delivered", "Failed", "Cancelled"].map((status) => {
+          {["All", "Delivered", "Cancelled"].map((status) => {
             const colors = {
               All: "#00b2e1",
               Delivered: "#29bf12",
-              Failed: "#f21b3f",
-              Cancelled: "#ff9914",
+              Cancelled: "#f21b3f",
             };
 
             return (
@@ -173,31 +178,32 @@ useEffect(() => {
       ) : (
         <FlatList
           data={filteredParcels}
-          keyExtractor={(item) => item.ParcelID}
+          keyExtractor={(item) => item.parcelId}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.parcelCard}
               onPress={() => setSelectedParcel(item)}
             >
               <View style={styles.cardHeader}>
-                <Text style={styles.parcelName}>{item.Recipient}</Text>
+                <Text style={styles.parcelName}>{item.recipient}</Text>
                 <View
                   style={[
                     styles.statusBadge,
-                    { backgroundColor: statusColors[item.Status] || "#ccc" },
+                    { backgroundColor: statusColors[item.status] || "#ccc" },
                   ]}
                 >
-                  <Text style={styles.statusText}>{item.Status}</Text>
+                  <Text style={styles.statusText}>{item.status}</Text>
                 </View>
               </View>
-              <Text style={styles.parcelText}>{item.FullAddress}</Text>
-              <Text style={styles.parcelText}>{item.Contact}</Text>
+              <Text style={styles.parcelText}>
+                {item.street}, {item.barangay}, {item.municipality}, {item.province}
+              </Text>
+              <Text style={styles.parcelText}>{item.contact}</Text>
             </TouchableOpacity>
           )}
         />
       )}
 
-      {/* Modal */}
       <ParcelDetailsModal
         visible={!!selectedParcel}
         parcel={selectedParcel}

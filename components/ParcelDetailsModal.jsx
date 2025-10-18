@@ -2,25 +2,19 @@ import { useEffect, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import DropDownPicker from "react-native-dropdown-picker";
 
-export default function ParcelDetailsModal({
-  visible,
-  parcel,
-  onClose,
-  onUpdateStatus,
-}) {
+export default function ParcelDetailsModal({ visible, parcel, onClose, onUpdateStatus }) {
   const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState(parcel?.Status || null);
-  const [initialStatus, setInitialStatus] = useState(parcel?.Status || null);
+  const [status, setStatus] = useState(parcel?.status || null);
+  const [initialStatus, setInitialStatus] = useState(parcel?.status || null);
+
   const [items, setItems] = useState([
-    { label: "To Deliver", value: "To Deliver" },
     { label: "Delivered", value: "Delivered" },
-    { label: "Failed", value: "Failed" },
     { label: "Cancelled", value: "Cancelled" },
   ]);
 
   useEffect(() => {
-    setStatus(parcel?.Status ?? null);
-    setInitialStatus(parcel?.Status ?? null);
+    setStatus(parcel?.status ?? null);
+    setInitialStatus(parcel?.status ?? null);
   }, [parcel]);
 
   if (!parcel) return null;
@@ -28,15 +22,9 @@ export default function ParcelDetailsModal({
   const hasChanged = status !== initialStatus;
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <View style={styles.modalContainer}>
-          {/* Scrollable details */}
           <ScrollView
             nestedScrollEnabled
             contentContainerStyle={{ paddingBottom: 12 }}
@@ -47,38 +35,43 @@ export default function ParcelDetailsModal({
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Recipient</Text>
               <Text style={styles.label}>Name</Text>
-              <Text style={styles.value}>{parcel.Recipient}</Text>
+              <Text style={styles.value}>{parcel.recipient}</Text>
 
               <Text style={styles.label}>Contact</Text>
-              <Text style={styles.value}>{parcel.Contact}</Text>
+              <Text style={styles.value}>{parcel.contact}</Text>
 
               <Text style={styles.label}>Address</Text>
-              <Text style={styles.value}>{parcel.FullAddress}</Text>
+              <Text style={styles.value}>
+                {parcel.street}, {parcel.barangay}, {parcel.municipality}, {parcel.province}
+              </Text>
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Parcel</Text>
+              <Text style={styles.sectionTitle}>Parcel Info</Text>
               <Text style={styles.label}>Reference</Text>
-              <Text style={styles.value}>{parcel.Reference}</Text>
+              <Text style={styles.value}>{parcel.reference}</Text>
 
-              <Text style={styles.label}>Weight</Text>
-              <Text style={styles.value}>{parcel.Weight}</Text>
+              <Text style={styles.label}>Package ID</Text>
+              <Text style={styles.value}>{parcel.packageId}</Text>
 
-              <Text style={styles.label}>COD Amount</Text>
-              <Text style={styles.value}>₱{parcel.CODAmount ?? 0}</Text>
-
-              <Text style={styles.label}>Notes</Text>
-              <Text style={styles.value}>{parcel.Notes || "—"}</Text>
+              <Text style={styles.label}>Assigned At</Text>
+              <Text style={styles.value}>
+                {parcel.assignedAt?.toDate
+                  ? parcel.assignedAt.toDate().toLocaleString()
+                  : "—"}
+              </Text>
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Delivery</Text>
-              <Text style={styles.label}>Courier</Text>
-              <Text style={styles.value}>{parcel.Courier || "—"}</Text>
+              <Text style={styles.sectionTitle}>Driver</Text>
+              <Text style={styles.label}>Name</Text>
+              <Text style={styles.value}>{parcel.driverName}</Text>
+
+              <Text style={styles.label}>Region</Text>
+              <Text style={styles.value}>{parcel.region}</Text>
             </View>
           </ScrollView>
 
-          {/* Dropdown OUTSIDE scrollview */}
           <View style={{ zIndex: 2000, marginTop: 8 }}>
             <Text style={[styles.label, { marginBottom: 4 }]}>Update Status</Text>
             <DropDownPicker
@@ -96,12 +89,8 @@ export default function ParcelDetailsModal({
             />
           </View>
 
-          {/* Buttons */}
           <View style={styles.buttonsRow}>
-            <Pressable
-              style={[styles.btn, styles.closeBtn]}
-              onPress={onClose}
-            >
+            <Pressable style={[styles.btn, styles.closeBtn]} onPress={onClose}>
               <Text style={styles.closeText}>Close</Text>
             </Pressable>
 
