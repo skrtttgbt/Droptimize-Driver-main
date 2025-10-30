@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFonts } from "expo-font";
 import * as Location from "expo-location";
 import { Stack, useRouter } from "expo-router";
+import * as Speech from "expo-speech";
 import * as SplashScreen from "expo-splash-screen";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
@@ -59,8 +60,7 @@ export default function RootLayout() {
     Animated.timing(slideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
   };
   const closeMenu = () => {
-    Animated.timing(slideAnim, { toValue: -DRAWER_WIDTH, duration: 250, useNativeDriver: true })
-      .start(() => setMenuOpen(false));
+    Animated.timing(slideAnim, { toValue: -DRAWER_WIDTH, duration: 250, useNativeDriver: true }).start(() => setMenuOpen(false));
   };
   const BurgerButton = () => (
     <TouchableOpacity onPress={openMenu} style={{ marginLeft: 10 }}>
@@ -70,7 +70,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     const hideSplash = async () => {
-      try { await SplashScreen.hideAsync(); } catch {}
+      try {
+        await SplashScreen.hideAsync();
+      } catch {}
     };
     if (fontsLoaded || fontError) hideSplash();
     const timer = setTimeout(() => hideSplash(), 3000);
@@ -93,9 +95,7 @@ export default function RootLayout() {
         return;
       }
       const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const initialSpeedKmh =
-        typeof initial.coords.speed === "number" && isFinite(initial.coords.speed)
-          ? Math.max(0, initial.coords.speed * 3.6) : null;
+      const initialSpeedKmh = typeof initial.coords.speed === "number" && isFinite(initial.coords.speed) ? Math.max(0, initial.coords.speed * 3.6) : null;
 
       await updateDoc(doc(db, "users", uid), {
         location: {
@@ -130,20 +130,22 @@ export default function RootLayout() {
               },
               lastLocationAt: serverTimestamp(),
             });
-          } catch (e) {
-            console.warn("Failed to update location:", e);
-          }
+          } catch {}
         }
       );
-    } catch (e) {
-      console.warn("startLocationWatch error:", e);
-    }
+    } catch {}
+  };
+
+  const speak = (msg) => {
+    try {
+      Speech.stop();
+      Speech.speak(msg, { language: "en-US", rate: 1.0, pitch: 1.0, volume: 1.0 });
+    } catch {}
   };
 
   const showViolationsSequentially = async (userRef, currentList) => {
     if (isAlertingViolationRef.current) return;
-    const hasUnconfirmed = (Array.isArray(currentList) ? currentList : [])
-      .some((v) => !(v && v.confirmed === true));
+    const hasUnconfirmed = (Array.isArray(currentList) ? currentList : []).some((v) => !(v && v.confirmed === true));
     if (!hasUnconfirmed) return;
 
     isAlertingViolationRef.current = true;
@@ -165,36 +167,38 @@ export default function RootLayout() {
       const lines = [
         v?.message || v?.title || v?.code || "Violation",
         when ? `When: ${when}` : null,
-        (typeof lat === "number" && typeof lng === "number")
-          ? `Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}`
-          : null,
-        Number.isFinite(v?.avgSpeed) ? `Avg speed: ${v.avgSpeed} km/h` : null,
-        Number.isFinite(v?.topSpeed) ? `Top speed: ${v.topSpeed} km/h` : null,
-        Number.isFinite(v?.speedAtIssue) ? `Speed at issue: ${v.speedAtIssue} km/h` : null,
+        typeof lat === "number" && typeof lng === "number" ? `Location: ${lat.toFixed(6)}, ${lng.toFixed(6)}` : null,
+        Number.isFinite(v?.avgSpeed) ? `Average speed: ${v.avgSpeed} kilometers per hour` : null,
+        Number.isFinite(v?.topSpeed) ? `Top speed: ${v.topSpeed} kilometers per hour` : null,
+        Number.isFinite(v?.speedAtIssue) ? `Speed at issue: ${v.speedAtIssue} kilometers per hour` : null,
       ].filter(Boolean);
+
+      const spoken = lines.join(". ");
+      speak(spoken);
 
       Alert.alert(
         "Notice of Violation",
         lines.join("\n"),
-        [{
-          text: "OK",
-          onPress: async () => {
-            try {
-              const refSnap = await getDoc(userRef);
-              const arr = refSnap.exists() ? refSnap.data()?.violations || [] : [];
-              const idxToMark = arr.findIndex((x) => !(x && x.confirmed === true));
-              if (idxToMark >= 0) {
-                const updated = arr.map((item, i) =>
-                  i === idxToMark ? { ...(item || {}), confirmed: true } : item
-                );
-                await updateDoc(userRef, { violations: updated });
+        [
+          {
+            text: "OK",
+            onPress: async () => {
+              try {
+                Speech.stop();
+                const refSnap = await getDoc(userRef);
+                const arr = refSnap.exists() ? refSnap.data()?.violations || [] : [];
+                const idxToMark = arr.findIndex((x) => !(x && x.confirmed === true));
+                if (idxToMark >= 0) {
+                  const updated = arr.map((item, i) => (i === idxToMark ? { ...(item || {}), confirmed: true } : item));
+                  await updateDoc(userRef, { violations: updated });
+                }
+                showNext();
+              } catch {
+                isAlertingViolationRef.current = false;
               }
-              showNext();
-            } catch {
-              isAlertingViolationRef.current = false;
-            }
+            },
           },
-        }],
+        ],
         { cancelable: false }
       );
     };
@@ -236,9 +240,7 @@ export default function RootLayout() {
             try {
               ensuredViolationsRef.current = true;
               await updateDoc(userRef, { violations: [] });
-            } catch (e) {
-              console.warn("Failed to set default violations: []", e);
-            }
+            } catch {}
           }
 
           if (Array.isArray(data.violations)) {
@@ -257,8 +259,7 @@ export default function RootLayout() {
           if (status === "delivering") startLocationWatch(user.uid);
           else stopLocationWatch();
         });
-      } catch (err) {
-        console.error(err);
+      } catch {
         await signOut(auth);
         setUserData(null);
         setInitialRoute("Login");
@@ -272,6 +273,7 @@ export default function RootLayout() {
       unsubscribe();
       if (userDocUnsub) userDocUnsub();
       stopLocationWatch();
+      Speech.stop();
     };
   }, [router]);
 
@@ -294,9 +296,7 @@ export default function RootLayout() {
           headerTitleAlign: "center",
           headerStyle: { elevation: 0, shadowOpacity: 0, backgroundColor: "#fff" },
           headerLeft: () => <BurgerButton />,
-          headerTitle: () => (
-            <Image source={logo} style={{ width: 160, height: 35 }} resizeMode="contain" />
-          ),
+          headerTitle: () => <Image source={logo} style={{ width: 160, height: 35 }} resizeMode="contain" />,
         }}
       >
         <Stack.Screen name="Login" options={{ headerShown: false }} />
@@ -317,10 +317,7 @@ export default function RootLayout() {
             <View style={styles.overlay} />
           </TouchableWithoutFeedback>
           <Animated.View style={[styles.drawer, { transform: [{ translateX: slideAnim }] }]}>
-            <Navigation
-              userData={userData}
-              onNavigate={(path) => { closeMenu(); router.replace(path); }}
-            />
+            <Navigation userData={userData} onNavigate={(path) => { closeMenu(); router.replace(path); }} />
           </Animated.View>
         </>
       )}
@@ -329,6 +326,28 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
-  overlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.3)", zIndex: 1 },
-  drawer: { position: "absolute", top: 0, bottom: 0, left: 0, width: DRAWER_WIDTH, backgroundColor: "#fff", zIndex: 2, elevation: 5 },
+  overlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    zIndex: 1,
+  },
+  drawer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: DRAWER_WIDTH,
+    backgroundColor: "#fff",
+    zIndex: 2,
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+  },
 });
+
