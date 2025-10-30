@@ -4,6 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import haversine from "haversine-distance";
 import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
 import Svg, { Polygon } from "react-native-svg";
