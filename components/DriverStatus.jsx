@@ -1,7 +1,7 @@
 import { StyleSheet, Text, View } from "react-native";
 
 export default function DriverStatus() {
-  const driverStatus = "Available"; // You can change this to "busy" or other status
+  const driverStatus = "available"; // You can change this to "busy" or other status
 
   const statusColor = {
     available: "#29bf12",  // Green
