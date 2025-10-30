@@ -29,14 +29,11 @@ export default function Home() {
   const [userData, setUserData] = useState(null);
   const [deliveries, setDeliveries] = useState([]);
   const [nextDelivery, setNextDelivery] = useState(null);
-
-  // Live driving telemetry (no speed limit)
   const [speed, setSpeed] = useState(0);
 
   const { width: screenWidth } = Dimensions.get("window");
   const user = auth.currentUser;
 
-  // Initial load (user + parcels)
   useEffect(() => {
     const init = async () => {
       if (!user) return;
@@ -61,7 +58,6 @@ export default function Home() {
     init();
   }, [user]);
 
-  // Subscribe to live user doc for speed (and status)
   useEffect(() => {
     if (!user) return;
     const ref = doc(db, "users", user.uid);
@@ -71,8 +67,6 @@ export default function Home() {
         if (!snap.exists()) return;
         const d = snap.data();
         setUserData(d);
-
-        // Current speed from Expo updater (km/h)
         const liveKmh =
           typeof d?.location?.speedKmh === "number" && isFinite(d.location.speedKmh)
             ? Math.round(d.location.speedKmh)
@@ -142,8 +136,6 @@ export default function Home() {
     setDeliveries([]);
     setNextDelivery(null);
   };
-
-  // Cancel in Available state
   const handleCancelShift = async () => {
     await handleEndShift();
   };
