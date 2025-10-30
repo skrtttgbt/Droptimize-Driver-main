@@ -1,29 +1,98 @@
+// screens/Map.jsx (or Map.js)
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { onAuthStateChanged } from "firebase/auth";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  where,
-} from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import haversine from "haversine-distance";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from "react-native";
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
+import Svg, { Polygon } from "react-native-svg";
 import { auth, db } from "../firebaseConfig";
 
-const GOOGLE_MAPS_APIKEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+const GOOGLE_MAPS_APIKEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || "";
+
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.openstreetmap.ru/api/interpreter",
+];
+
+async function fetchOverpass(queryStr, { timeoutMs = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const body = `data=${encodeURIComponent(queryStr)}`;
+  let lastErr;
+  for (const base of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(base, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          Accept: "application/json",
+        },
+        body,
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}: ${text?.slice(0, 200)}`);
+      const parsed = JSON.parse(text);
+      clearTimeout(timer);
+      return parsed;
+    } catch (e) {
+      lastErr = e;
+      try {
+        const url = `${base}?data=${encodeURIComponent(queryStr)}`;
+        const res = await fetch(url, { headers: { Accept: "application/json" }, signal: controller.signal });
+        const text = await res.text();
+        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} (GET): ${text?.slice(0, 200)}`);
+        const parsed = JSON.parse(text);
+        clearTimeout(timer);
+        return parsed;
+      } catch (e2) {
+        lastErr = e2;
+      }
+    }
+  }
+  clearTimeout(timer);
+  throw lastErr || new Error("Overpass fetch failed");
+}
+
+function bearingBetween(a, b) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const lon1 = toRad(a.longitude);
+  const lon2 = toRad(b.longitude);
+  const dLon = lon2 - lon1;
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  let deg = toDeg(Math.atan2(y, x));
+  if (deg < 0) deg += 360;
+  return deg;
+}
+
+function smoothHeading(prevDeg, nextDeg) {
+  if (!Number.isFinite(prevDeg)) return nextDeg;
+  const diff = ((nextDeg - prevDeg + 540) % 360) - 180;
+  return (prevDeg + diff * 0.25 + 360) % 360;
+}
+
+// haversine-distance expects {lat, lon}
+function metersBetween(a, b) {
+  return haversine({ lat: a.latitude, lon: a.longitude }, { lat: b.latitude, lon: b.longitude });
+}
 
 export default function Map({ user: passedUser }) {
   const [user, setUser] = useState(passedUser || null);
   const [userData, setUserData] = useState(null);
+
   const [parcels, setParcels] = useState([]);
   const [location, setLocation] = useState(null);
-  const [heading, setHeading] = useState(0);
+  const [headingDeg, setHeadingDeg] = useState(0);
+
   const [loading, setLoading] = useState(true);
   const [slowdowns, setSlowdowns] = useState([]);
   const [speedLimit, setSpeedLimit] = useState(0);
@@ -34,8 +103,18 @@ export default function Map({ user: passedUser }) {
   const [activeSlowdown, setActiveSlowdown] = useState(null);
   const [showSlowdownWarning, setShowSlowdownWarning] = useState(false);
 
-  const locationSubscription = useRef(null);
   const mapRef = useRef(null);
+  const locationSubscription = useRef(null);
+  const headingSubscription = useRef(null);
+
+  const prevCoordRef = useRef(null);
+  const prevTimeRef = useRef(null);
+  const lastCourseRef = useRef(null);
+  const cameraZoomRef = useRef(null);
+  const lastCamUpdateRef = useRef(0);
+  const routeFitDoneRef = useRef(false);
+
+  const isAlertingViolationRef = useRef(false);
 
   const DEFAULT_RADIUS = 15;
   const OVERPASS_RADIUS = 1000;
@@ -49,14 +128,40 @@ export default function Map({ user: passedUser }) {
     Default: "#9e9e9e",
   };
 
+  async function getInitialPosition() {
+    try {
+      await Location.hasServicesEnabledAsync();
+      const last = await Location.getLastKnownPositionAsync();
+      if (last?.coords) return last;
+      const fresh = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("loc-timeout")), 8000)),
+      ]);
+      return fresh;
+    } catch {
+      return null;
+    }
+  }
+
+  async function reverseGeocode(lat, lng) {
+    try {
+      if (!GOOGLE_MAPS_APIKEY) return null;
+      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_APIKEY}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.status === "OK" && Array.isArray(data.results) && data.results[0]?.formatted_address) {
+        return data.results[0].formatted_address;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
 
   useEffect(() => {
-    if (!user) {
-      const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-        if (firebaseUser) setUser(firebaseUser);
-      });
-      return unsubscribe;
-    }
+    if (user) return;
+    const unsub = onAuthStateChanged(auth, (fbUser) => setUser(fbUser || null));
+    return unsub;
   }, [user]);
 
   useEffect(() => {
@@ -66,42 +171,82 @@ export default function Map({ user: passedUser }) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         setLoading(false);
-        console.warn("Location permission not granted");
         return;
       }
 
-      const initial = await Location.getCurrentPositionAsync({});
-      await loadEverything(initial.coords);
+      const initial = await getInitialPosition();
+      if (initial?.coords) {
+        setLocation(initial.coords);
+        prevCoordRef.current = initial.coords;
+        prevTimeRef.current = initial.timestamp || Date.now();
+        setLoading(false);
+        await loadEverything(initial.coords);
+      } else {
+        setLoading(false);
+        return;
+      }
+
+      if (!headingSubscription.current) {
+        headingSubscription.current = await Location.watchHeadingAsync((h) => {
+          const hdg = Platform.OS === "ios" ? h.trueHeading ?? h.magHeading ?? 0 : h.magHeading ?? h.trueHeading ?? 0;
+          if (Number.isFinite(hdg)) setHeadingDeg((prev) => smoothHeading(prev, hdg));
+        });
+      }
 
       locationSubscription.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.Highest,
-          timeInterval: 1000,
-          distanceInterval: 1,
-        },
-        (position) => {
+        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 800, distanceInterval: 1 },
+        async (position) => {
           const coords = position.coords;
           setLocation(coords);
-          setHeading(coords.heading || 0);
-          setLoading(false);
 
-          const speedKmh = coords.speed ? coords.speed * 3.6 : 0;
-          setVehicleSpeed(Math.round(speedKmh));
+          const gpsKmh = Number.isFinite(coords.speed) ? coords.speed * 3.6 : NaN;
+          let derivedKmh = NaN;
+          if (prevCoordRef.current && prevTimeRef.current) {
+            const distM = metersBetween(
+              { latitude: prevCoordRef.current.latitude, longitude: prevCoordRef.current.longitude },
+              { latitude: coords.latitude, longitude: coords.longitude }
+            );
+            const dt = Math.max(0.5, (position.timestamp - prevTimeRef.current) / 1000);
+            derivedKmh = (distM / dt) * 3.6;
+          }
+          let kmh = Number.isFinite(gpsKmh) ? gpsKmh : Number.isFinite(derivedKmh) ? derivedKmh : 0;
+
+          const dests = parcels.map((p) => ({ latitude: p.destination.latitude, longitude: p.destination.longitude }));
+          let atStop = false;
+          if (dests.length > 0) {
+            const dists = dests.map((d) => metersBetween({ latitude: coords.latitude, longitude: coords.longitude }, d));
+            const minD = Math.min(...dists);
+            if (minD <= 20) atStop = true;
+          }
+          if (kmh < 2 || atStop) kmh = 0;
+          setVehicleSpeed(Math.round(kmh));
+
+          if (prevCoordRef.current) {
+            const moveM = metersBetween(
+              { latitude: prevCoordRef.current.latitude, longitude: prevCoordRef.current.longitude },
+              { latitude: coords.latitude, longitude: coords.longitude }
+            );
+            if (moveM > 1.5) {
+              const course = bearingBetween(prevCoordRef.current, coords);
+              lastCourseRef.current = course;
+              const useCourse = kmh > 3 || !Number.isFinite(headingDeg);
+              if (useCourse) setHeadingDeg((prev) => smoothHeading(prev, course));
+            }
+          }
+          prevCoordRef.current = coords;
+          prevTimeRef.current = position.timestamp || Date.now();
 
           let nearestLimit = 0;
           let nearbyZone = null;
-
           slowdowns.forEach((s) => {
             if (!s.location?.lat || !s.location?.lng) return;
-            const dist = haversine(coords, s.location);
+            const dist = metersBetween(coords, { latitude: s.location.lat, longitude: s.location.lng });
             const zoneRadius = s.radius || DEFAULT_RADIUS;
-
             if (dist < zoneRadius) {
               nearestLimit = s.speedLimit || nearestLimit;
               nearbyZone = s;
             }
           });
-
           setSpeedLimit(nearestLimit);
 
           if (nearbyZone && (!activeSlowdown || activeSlowdown.id !== nearbyZone.id)) {
@@ -114,30 +259,47 @@ export default function Map({ user: passedUser }) {
           }
 
           if (mapRef.current && drivingMode) {
-            const offsetDistance = 0.001; 
-            const rad = (coords.heading * Math.PI) / 180;
-            const offsetLat = coords.latitude + offsetDistance * Math.cos(rad);
-            const offsetLng = coords.longitude + offsetDistance * Math.sin(rad);
+            const now = Date.now();
+            if (now - lastCamUpdateRef.current > 500) {
+              lastCamUpdateRef.current = now;
 
-            mapRef.current.animateCamera({
-              center: { latitude: offsetLat, longitude: offsetLng },
-              heading: coords.heading,
-              pitch: 50,
-              zoom: 17,
-            });
+              if (cameraZoomRef.current == null) {
+                try {
+                  const cam = await mapRef.current.getCamera();
+                  cameraZoomRef.current = cam?.zoom ?? 17;
+                } catch {
+                  cameraZoomRef.current = 17;
+                }
+              }
+
+              const az = (lastCourseRef.current ?? headingDeg ?? 0) * (Math.PI / 180);
+              const offsetDistance = 0.0005;
+              const offsetLat = coords.latitude + offsetDistance * Math.cos(az);
+              const offsetLng = coords.longitude + offsetDistance * Math.sin(az);
+
+              mapRef.current.animateCamera(
+                {
+                  center: { latitude: offsetLat, longitude: offsetLng },
+                  heading: lastCourseRef.current ?? headingDeg ?? 0,
+                  pitch: 50,
+                  zoom: cameraZoomRef.current,
+                },
+                { duration: 500 }
+              );
+            }
           }
         }
       );
     })();
 
     return () => {
-      if (locationSubscription.current) {
-        locationSubscription.current.remove();
-      }
+      locationSubscription.current?.remove?.();
+      locationSubscription.current = null;
+      headingSubscription.current?.remove?.();
+      headingSubscription.current = null;
     };
-  }, [user, slowdowns, drivingMode]);
+  }, [user, slowdowns, drivingMode, parcels, headingDeg]);
 
-  // Load Firestore + Overpass
   const loadBranchSlowdowns = async (branchId) => {
     try {
       const branchRef = doc(db, "branches", branchId);
@@ -152,33 +314,26 @@ export default function Map({ user: passedUser }) {
         radius: s.radius || DEFAULT_RADIUS,
         speedLimit: s.speedLimit || 0,
       }));
-    } catch (error) {
-      console.warn("Error in loadBranchSlowdowns:", error);
+    } catch {
       return [];
     }
   };
 
   const loadOverpassCrosswalks = async (lat, lon) => {
     try {
-      const queryStr = `
-        [out:json][timeout:25];
-        (node["highway"="crossing"](around:${OVERPASS_RADIUS},${lat},${lon}););
-        out body;
-      `;
-      const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(queryStr)}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!data.elements) return [];
-
-      return data.elements.map((el, i) => ({
-        id: `cross_${i}`,
-        category: "Crosswalk",
-        location: { lat: el.lat, lng: el.lon },
-        radius: DEFAULT_RADIUS,
-        speedLimit: 20,
-      }));
-    } catch (error) {
-      console.warn("Error in loadOverpassCrosswalks:", error);
+      const queryStr = `[out:json][timeout:25];(node["highway"="crossing"](around:${OVERPASS_RADIUS},${lat},${lon}););out body;`;
+      const data = await fetchOverpass(queryStr);
+      if (!data || !Array.isArray(data.elements)) return [];
+      return data.elements
+        .filter((el) => typeof el.lat === "number" && typeof el.lon === "number")
+        .map((el, i) => ({
+          id: `cross_${el.id || i}`,
+          category: "Crosswalk",
+          location: { lat: el.lat, lng: el.lon },
+          radius: DEFAULT_RADIUS,
+          speedLimit: 20,
+        }));
+    } catch {
       return [];
     }
   };
@@ -187,27 +342,85 @@ export default function Map({ user: passedUser }) {
     if (!user) return [];
     try {
       const parcelsCol = collection(db, "parcels");
-      const q = query(
-        parcelsCol,
-        where("driverUid", "==", user.uid),
-        where("status", "==", "Out for Delivery")
-      );
+      const q = query(parcelsCol, where("driverUid", "==", user.uid), where("status", "==", "Out for Delivery"));
       const querySnap = await getDocs(q);
       if (querySnap.empty) return [];
-
       return querySnap.docs
         .map((d) => d.data())
-        .filter(
-          (p) =>
-            p.destination &&
-            typeof p.destination.latitude === "number" &&
-            typeof p.destination.longitude === "number"
-        );
-    } catch (error) {
-      console.warn("Error loading parcels:", error);
+        .filter((p) => p.destination && typeof p.destination.latitude === "number" && typeof p.destination.longitude === "number")
+    } catch {
       return [];
     }
   };
+
+  async function showViolationsSequentially(userRef, violations) {
+    if (isAlertingViolationRef.current) return;
+
+    const queue = (Array.isArray(violations) ? violations : [])
+      .map((v, i) => ({ ...v, __idx: i }))
+      .filter((v) => !(v && v.confirmed === true));
+
+    if (queue.length === 0) return;
+
+    isAlertingViolationRef.current = true;
+
+    const showNext = async () => {
+      const freshSnap = await getDoc(userRef);
+      const fresh = freshSnap.exists() ? freshSnap.data()?.violations || [] : [];
+      const next = fresh.map((v, i) => ({ ...v, __idx: i })).find((v) => !(v && v.confirmed === true));
+      if (!next) {
+        isAlertingViolationRef.current = false;
+        return;
+      }
+
+      const lat = next?.driverLocation?.latitude ?? next?.driverLocation?.lat ?? null;
+      const lng = next?.driverLocation?.longitude ?? next?.driverLocation?.lng ?? null;
+      const issuedAtStr = next?.issuedAt?.toDate?.() ? next.issuedAt.toDate().toLocaleString() : "";
+
+      let address = null;
+      if (typeof lat === "number" && typeof lng === "number") {
+        address = await reverseGeocode(lat, lng);
+      }
+
+      const lines = [
+        next?.message || next?.title || next?.code || "Violation",
+        issuedAtStr ? `When: ${issuedAtStr}` : null,
+        address ? `Location: ${address}` : null,
+        Number.isFinite(next?.avgSpeed) ? `Avg speed: ${next.avgSpeed} km/h` : null,
+        Number.isFinite(next?.topSpeed) ? `Top speed: ${next.topSpeed} km/h` : null,
+      ].filter(Boolean);
+
+      Alert.alert(
+        "Notice of Violation",
+        lines.join("\n"),
+        [
+          {
+            text: "OK",
+            onPress: async () => {
+              try {
+                const latestSnap = await getDoc(userRef);
+                const arr = latestSnap.exists() ? latestSnap.data()?.violations || [] : [];
+                let markIndex = next.__idx;
+                if (!(arr[markIndex] && arr[markIndex].confirmed !== true)) {
+                  markIndex = arr.findIndex((v) => !(v && v.confirmed === true));
+                }
+                if (markIndex >= 0) {
+                  const updated = arr.map((item, i) => (i === markIndex ? { ...(item || {}), confirmed: true } : item));
+                  await updateDoc(userRef, { violations: updated });
+                }
+                showNext();
+              } catch {
+                isAlertingViolationRef.current = false;
+              }
+            },
+          },
+        ],
+        { cancelable: false }
+      );
+    };
+
+    showNext();
+  }
 
   const loadEverything = async (coords) => {
     if (!user) return;
@@ -218,6 +431,10 @@ export default function Map({ user: passedUser }) {
       const udata = userSnap.data();
       setUserData(udata);
       setDrivingMode(udata.status === "Delivering");
+
+      const arr = Array.isArray(udata.violations) ? udata.violations : [];
+      const hasUnconfirmed = arr.some((v) => !(v && v.confirmed === true));
+      if (hasUnconfirmed) showViolationsSequentially(userRef, arr);
 
       let allSlowdowns = [];
       if (udata.branchId) {
@@ -232,13 +449,8 @@ export default function Map({ user: passedUser }) {
 
       const parcelList = await loadAllParcels();
       setParcels(parcelList);
-    } catch (error) {
-      console.warn("Error in loadEverything:", error);
-    }
+    } catch {}
   };
-
-  const isOverspeeding = speedLimit > 0 && vehicleSpeed > speedLimit;
-  const isDelivering = userData?.status === "Delivering";
 
   const getETAColor = () => {
     if (etaMinutes == null) return "#1E88E5";
@@ -258,7 +470,7 @@ export default function Map({ user: passedUser }) {
   if (!location)
     return (
       <View style={styles.loadingContainer}>
-        <Text>Location unavailable. Please enable GPS.</Text>
+        <Text>Location unavailable. Please enable GPS / Location Services.</Text>
       </View>
     );
 
@@ -273,12 +485,8 @@ export default function Map({ user: passedUser }) {
     <View style={styles.container}>
       {etaMinutes != null && distanceKm != null && (
         <View style={[styles.etaPanel, { backgroundColor: getETAColor() }]}>
-          <Text style={styles.etaText}>
-            {etaMinutes} min • {distanceKm.toFixed(1)} km
-          </Text>
-          <Text style={styles.etaSubText}>
-            {drivingMode ? "Driving Mode Active" : "Optimized Route"}
-          </Text>
+          <Text style={styles.etaText}>{etaMinutes} min • {distanceKm.toFixed(1)} km</Text>
+          <Text style={styles.etaSubText}>{drivingMode ? "Driving Mode Active" : "Optimized Route"}</Text>
         </View>
       )}
 
@@ -287,33 +495,41 @@ export default function Map({ user: passedUser }) {
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         showsTraffic
-        region={{
+        compassEnabled
+        showsCompass
+        initialRegion={{
           latitude: location.latitude,
           longitude: location.longitude,
-          latitudeDelta: drivingMode ? 0.005 : 0.01,
-          longitudeDelta: drivingMode ? 0.005 : 0.01,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }}
+        onMapReady={async () => {
+          try {
+            const cam = await mapRef.current?.getCamera?.();
+            if (cam?.zoom != null) cameraZoomRef.current = cam.zoom;
+          } catch {}
         }}
       >
         <Marker
-          coordinate={{
-            latitude: location.latitude,
-            longitude: location.longitude,
-          }}
+          coordinate={{ latitude: location.latitude, longitude: location.longitude }}
           anchor={{ x: 0.5, y: 0.5 }}
           flat
-          rotation={heading}
+          zIndex={9999}
         >
-          <Ionicons name="navigate" size={40} color="#ff0000ff" />
+          <View style={styles.puck}>
+            <View style={{ transform: [{ rotate: `${Number.isFinite(headingDeg) ? headingDeg : 0}deg` }] }}>
+              <Svg width={22} height={22} viewBox="0 0 24 24">
+                <Polygon points="12,2 5,22 12,18 19,22" fill="#1a73e8" />
+              </Svg>
+            </View>
+          </View>
         </Marker>
 
         {slowdowns.map((s, i) =>
           s.location?.lat && s.location?.lng ? (
             <Circle
               key={i}
-              center={{
-                latitude: s.location.lat,
-                longitude: s.location.lng,
-              }}
+              center={{ latitude: s.location.lat, longitude: s.location.lng }}
               radius={s.radius || DEFAULT_RADIUS}
               strokeColor={CATEGORY_COLORS[s.category] || CATEGORY_COLORS.Default}
               fillColor={`${CATEGORY_COLORS[s.category] || CATEGORY_COLORS.Default}55`}
@@ -322,7 +538,7 @@ export default function Map({ user: passedUser }) {
           ) : null
         )}
 
-        {isDelivering && destinations.length > 0 && (
+        {userData?.status === "Delivering" && destinations.length > 0 && GOOGLE_MAPS_APIKEY ? (
           <>
             {destinations.map((d, i) => (
               <Marker
@@ -333,10 +549,7 @@ export default function Map({ user: passedUser }) {
               />
             ))}
             <MapViewDirections
-              origin={{
-                latitude: location.latitude,
-                longitude: location.longitude,
-              }}
+              origin={{ latitude: location.latitude, longitude: location.longitude }}
               destination={finalDestination}
               waypoints={waypoints}
               apikey={GOOGLE_MAPS_APIKEY}
@@ -344,19 +557,26 @@ export default function Map({ user: passedUser }) {
               strokeColor="#4285F4"
               optimizeWaypoints
               mode="DRIVING"
-              onReady={(result) => {
-                if (mapRef.current) {
+              onReady={async (result) => {
+                if (!routeFitDoneRef.current && mapRef.current) {
+                  routeFitDoneRef.current = true;
                   mapRef.current.fitToCoordinates(result.coordinates, {
                     edgePadding: { top: 80, right: 50, bottom: 120, left: 50 },
                     animated: true,
                   });
+                  setTimeout(async () => {
+                    try {
+                      const cam = await mapRef.current?.getCamera?.();
+                      if (cam?.zoom != null) cameraZoomRef.current = cam.zoom;
+                    } catch {}
+                  }, 600);
                 }
                 setEtaMinutes(Math.round(result.duration));
                 setDistanceKm(result.distance);
               }}
             />
           </>
-        )}
+        ) : null}
       </MapView>
 
       {showSlowdownWarning && activeSlowdown && (
@@ -372,25 +592,21 @@ export default function Map({ user: passedUser }) {
         <View style={styles.row}>
           <View style={styles.speedCard}>
             <Text style={styles.label}>Speed Limit</Text>
-            <Text style={[styles.speedValue, { color: "#29bf12" }]}>
-              {speedLimit > 0 ? speedLimit : "No limit"}
-            </Text>
+            <Text style={[styles.speedValue, { color: "#29bf12" }]}>{speedLimit > 0 ? speedLimit : "No limit"}</Text>
             {speedLimit > 0 && <Text style={styles.unit}>km/h</Text>}
           </View>
-
           <View style={styles.speedCard}>
             <Text style={styles.label}>Current Speed</Text>
             <Text
               style={[
                 styles.speedValue,
-                { color: isOverspeeding ? "#f21b3f" : "#29bf12" },
+                { color: speedLimit > 0 && vehicleSpeed > speedLimit ? "#f21b3f" : "#29bf12" },
               ]}
             >
               {vehicleSpeed}
             </Text>
             <Text style={styles.unit}>km/h</Text>
           </View>
-
           {etaMinutes != null && (
             <View style={styles.speedCard}>
               <Text style={styles.label}>ETA</Text>
@@ -399,8 +615,7 @@ export default function Map({ user: passedUser }) {
             </View>
           )}
         </View>
-
-        {isOverspeeding && (
+        {speedLimit > 0 && vehicleSpeed > speedLimit && (
           <View style={styles.warningBox}>
             <Ionicons name="alert-circle" size={20} color="#f21b3f" />
             <Text style={styles.warningText}>You are overspeeding!</Text>
@@ -414,11 +629,7 @@ export default function Map({ user: passedUser }) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
+  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
   etaPanel: {
     position: "absolute",
     top: 40,
@@ -429,16 +640,19 @@ const styles = StyleSheet.create({
     zIndex: 10,
     elevation: 10,
   },
-  etaText: {
-    color: "#fff",
-    fontSize: 20,
-    fontWeight: "bold",
-    textAlign: "center",
-  },
-  etaSubText: {
-    color: "#e3f2fd",
-    fontSize: 14,
-    textAlign: "center",
+  etaText: { color: "#fff", fontSize: 20, fontWeight: "bold", textAlign: "center" },
+  etaSubText: { color: "#e3f2fd", fontSize: 14, textAlign: "center" },
+  puck: {
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    padding: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 3.5,
   },
   slowdownAlert: {
     position: "absolute",
@@ -482,15 +696,8 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 5,
   },
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 16,
-  },
-  speedCard: {
-    alignItems: "center",
-    flex: 1,
-  },
+  row: { flexDirection: "row", justifyContent: "space-around", marginBottom: 16 },
+  speedCard: { alignItems: "center", flex: 1 },
   label: { fontSize: 14, color: "#777", marginBottom: 4 },
   speedValue: { fontSize: 32, fontWeight: "bold" },
   unit: { fontSize: 12, color: "#555" },
@@ -502,10 +709,5 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 12,
   },
-  warningText: {
-    color: "#f21b3f",
-    fontWeight: "600",
-    fontSize: 14,
-    marginLeft: 8,
-  },
+  warningText: { color: "#f21b3f", fontWeight: "600", fontSize: 14, marginLeft: 8 },
 });

@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   updateDoc,
   where,
@@ -28,12 +29,14 @@ export default function Home() {
   const [userData, setUserData] = useState(null);
   const [deliveries, setDeliveries] = useState([]);
   const [nextDelivery, setNextDelivery] = useState(null);
+
+  // Live driving telemetry (no speed limit)
   const [speed, setSpeed] = useState(0);
-  const [speedLimit, setSpeedLimit] = useState(60);
 
   const { width: screenWidth } = Dimensions.get("window");
   const user = auth.currentUser;
 
+  // Initial load (user + parcels)
   useEffect(() => {
     const init = async () => {
       if (!user) return;
@@ -56,6 +59,31 @@ export default function Home() {
       }
     };
     init();
+  }, [user]);
+
+  // Subscribe to live user doc for speed (and status)
+  useEffect(() => {
+    if (!user) return;
+    const ref = doc(db, "users", user.uid);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) return;
+        const d = snap.data();
+        setUserData(d);
+
+        // Current speed from Expo updater (km/h)
+        const liveKmh =
+          typeof d?.location?.speedKmh === "number" && isFinite(d.location.speedKmh)
+            ? Math.round(d.location.speedKmh)
+            : typeof d?.speed === "number" && isFinite(d.speed)
+            ? Math.round(d.speed)
+            : 0;
+        setSpeed(liveKmh);
+      },
+      (err) => console.warn("Home user onSnapshot error:", err)
+    );
+    return () => unsub();
   }, [user]);
 
   const fetchParcels = async (data) => {
@@ -115,7 +143,7 @@ export default function Home() {
     setNextDelivery(null);
   };
 
-  // 🔹 New: Cancel button handler for "Available" state
+  // Cancel in Available state
   const handleCancelShift = async () => {
     await handleEndShift();
   };
@@ -183,7 +211,6 @@ export default function Home() {
                 </TouchableOpacity>
               )}
 
-              {/* 🔹 Cancel Button */}
               <TouchableOpacity
                 style={[styles.cancelButton, { width: screenWidth * 0.4 }]}
                 onPress={handleCancelShift}
@@ -214,20 +241,21 @@ export default function Home() {
                     width: screenWidth * 0.3,
                     height: screenWidth * 0.3,
                     borderRadius: screenWidth * 0.15,
+                    borderColor: "#29bf12",
                   },
                 ]}
               >
-                <Text
-                  style={[
-                    styles.speedValue,
-                    speed > speedLimit && { color: "#f21b3f" },
-                  ]}
-                >
-                  {speed}
-                </Text>
+                <Text style={styles.speedValue}>{speed}</Text>
                 <Text style={styles.speedUnit}>km/h</Text>
               </View>
-              <Text style={styles.speedLimit}>Limit: {speedLimit} km/h</Text>
+
+              {/* Go to Map button when Delivering */}
+              <TouchableOpacity
+                style={[styles.mapButton, { width: screenWidth * 0.5 }]}
+                onPress={() => router.push("/Map")}
+              >
+                <Text style={styles.mapButtonText}>Go to Map</Text>
+              </TouchableOpacity>
 
               <TouchableOpacity
                 style={[styles.endShiftButton, { width: screenWidth * 0.4 }]}
@@ -302,13 +330,11 @@ const styles = StyleSheet.create({
   waitText: { color: "#666", fontStyle: "italic", marginTop: 4 },
   speedCircle: {
     borderWidth: 6,
-    borderColor: "#29bf12",
     justifyContent: "center",
     alignItems: "center",
   },
   speedValue: { fontSize: 36, fontWeight: "bold", color: "#29bf12" },
   speedUnit: { fontSize: 14, color: "#555" },
-  speedLimit: { fontSize: 16, marginTop: 10, color: "#777" },
   endShiftButton: {
     marginTop: 16,
     height: 44,
@@ -335,4 +361,17 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cancelText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  mapButton: {
+    marginTop: 14,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0064b5",
+    borderRadius: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  mapButtonText: { fontSize: 16, fontWeight: "600", color: "#fff" },
 });
