@@ -1,11 +1,9 @@
-// screens/Map.jsx (or Map.js)
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
 import haversine from "haversine-distance";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from "react-native";
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
 import Svg, { Polygon } from "react-native-svg";
@@ -80,7 +78,6 @@ function smoothHeading(prevDeg, nextDeg) {
   return (prevDeg + diff * 0.25 + 360) % 360;
 }
 
-// haversine-distance expects {lat, lon}
 function metersBetween(a, b) {
   return haversine({ lat: a.latitude, lon: a.longitude }, { lat: b.latitude, lon: b.longitude });
 }
@@ -88,33 +85,30 @@ function metersBetween(a, b) {
 export default function Map({ user: passedUser }) {
   const [user, setUser] = useState(passedUser || null);
   const [userData, setUserData] = useState(null);
-
   const [parcels, setParcels] = useState([]);
   const [location, setLocation] = useState(null);
   const [headingDeg, setHeadingDeg] = useState(0);
-
   const [loading, setLoading] = useState(true);
   const [slowdowns, setSlowdowns] = useState([]);
   const [speedLimit, setSpeedLimit] = useState(0);
   const [vehicleSpeed, setVehicleSpeed] = useState(0);
   const [etaMinutes, setEtaMinutes] = useState(null);
   const [distanceKm, setDistanceKm] = useState(null);
-  const [drivingMode, setDrivingMode] = useState(false);
+  const [followPuck, setFollowPuck] = useState(true);
   const [activeSlowdown, setActiveSlowdown] = useState(null);
   const [showSlowdownWarning, setShowSlowdownWarning] = useState(false);
 
   const mapRef = useRef(null);
   const locationSubscription = useRef(null);
   const headingSubscription = useRef(null);
-
   const prevCoordRef = useRef(null);
   const prevTimeRef = useRef(null);
   const lastCourseRef = useRef(null);
-  const cameraZoomRef = useRef(null);
+  const cameraZoomRef = useRef(10);
   const lastCamUpdateRef = useRef(0);
   const routeFitDoneRef = useRef(false);
-
   const isAlertingViolationRef = useRef(false);
+  const zoomHazardsDoneRef = useRef(false);
 
   const DEFAULT_RADIUS = 15;
   const OVERPASS_RADIUS = 1000;
@@ -166,14 +160,12 @@ export default function Map({ user: passedUser }) {
 
   useEffect(() => {
     if (!user) return;
-
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         setLoading(false);
         return;
       }
-
       const initial = await getInitialPosition();
       if (initial?.coords) {
         setLocation(initial.coords);
@@ -185,20 +177,17 @@ export default function Map({ user: passedUser }) {
         setLoading(false);
         return;
       }
-
       if (!headingSubscription.current) {
         headingSubscription.current = await Location.watchHeadingAsync((h) => {
           const hdg = Platform.OS === "ios" ? h.trueHeading ?? h.magHeading ?? 0 : h.magHeading ?? h.trueHeading ?? 0;
           if (Number.isFinite(hdg)) setHeadingDeg((prev) => smoothHeading(prev, hdg));
         });
       }
-
       locationSubscription.current = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 800, distanceInterval: 1 },
         async (position) => {
           const coords = position.coords;
           setLocation(coords);
-
           const gpsKmh = Number.isFinite(coords.speed) ? coords.speed * 3.6 : NaN;
           let derivedKmh = NaN;
           if (prevCoordRef.current && prevTimeRef.current) {
@@ -210,7 +199,6 @@ export default function Map({ user: passedUser }) {
             derivedKmh = (distM / dt) * 3.6;
           }
           let kmh = Number.isFinite(gpsKmh) ? gpsKmh : Number.isFinite(derivedKmh) ? derivedKmh : 0;
-
           const dests = parcels.map((p) => ({ latitude: p.destination.latitude, longitude: p.destination.longitude }));
           let atStop = false;
           if (dests.length > 0) {
@@ -220,7 +208,6 @@ export default function Map({ user: passedUser }) {
           }
           if (kmh < 2 || atStop) kmh = 0;
           setVehicleSpeed(Math.round(kmh));
-
           if (prevCoordRef.current) {
             const moveM = metersBetween(
               { latitude: prevCoordRef.current.latitude, longitude: prevCoordRef.current.longitude },
@@ -235,7 +222,6 @@ export default function Map({ user: passedUser }) {
           }
           prevCoordRef.current = coords;
           prevTimeRef.current = position.timestamp || Date.now();
-
           let nearestLimit = 0;
           let nearbyZone = null;
           slowdowns.forEach((s) => {
@@ -248,7 +234,6 @@ export default function Map({ user: passedUser }) {
             }
           });
           setSpeedLimit(nearestLimit);
-
           if (nearbyZone && (!activeSlowdown || activeSlowdown.id !== nearbyZone.id)) {
             setActiveSlowdown(nearbyZone);
             setShowSlowdownWarning(true);
@@ -257,32 +242,28 @@ export default function Map({ user: passedUser }) {
               setActiveSlowdown(null);
             }, 7000);
           }
-
-          if (mapRef.current && drivingMode) {
+          if (mapRef.current && followPuck) {
             const now = Date.now();
             if (now - lastCamUpdateRef.current > 500) {
               lastCamUpdateRef.current = now;
-
               if (cameraZoomRef.current == null) {
                 try {
                   const cam = await mapRef.current.getCamera();
-                  cameraZoomRef.current = cam?.zoom ?? 17;
+                  cameraZoomRef.current = cam?.zoom ?? 10;
                 } catch {
-                  cameraZoomRef.current = 17;
+                  cameraZoomRef.current = 10;
                 }
               }
-
               const az = (lastCourseRef.current ?? headingDeg ?? 0) * (Math.PI / 180);
               const offsetDistance = 0.0005;
               const offsetLat = coords.latitude + offsetDistance * Math.cos(az);
               const offsetLng = coords.longitude + offsetDistance * Math.sin(az);
-
               mapRef.current.animateCamera(
                 {
                   center: { latitude: offsetLat, longitude: offsetLng },
                   heading: lastCourseRef.current ?? headingDeg ?? 0,
                   pitch: 50,
-                  zoom: cameraZoomRef.current,
+                  zoom: Math.max(10, cameraZoomRef.current ?? 10),
                 },
                 { duration: 500 }
               );
@@ -291,14 +272,13 @@ export default function Map({ user: passedUser }) {
         }
       );
     })();
-
     return () => {
       locationSubscription.current?.remove?.();
       locationSubscription.current = null;
       headingSubscription.current?.remove?.();
       headingSubscription.current = null;
     };
-  }, [user, slowdowns, drivingMode, parcels, headingDeg]);
+  }, [user, slowdowns, followPuck, parcels, headingDeg]);
 
   const loadBranchSlowdowns = async (branchId) => {
     try {
@@ -347,7 +327,7 @@ export default function Map({ user: passedUser }) {
       if (querySnap.empty) return [];
       return querySnap.docs
         .map((d) => d.data())
-        .filter((p) => p.destination && typeof p.destination.latitude === "number" && typeof p.destination.longitude === "number")
+        .filter((p) => p.destination && typeof p.destination.latitude === "number" && typeof p.destination.longitude === "number");
     } catch {
       return [];
     }
@@ -355,15 +335,11 @@ export default function Map({ user: passedUser }) {
 
   async function showViolationsSequentially(userRef, violations) {
     if (isAlertingViolationRef.current) return;
-
     const queue = (Array.isArray(violations) ? violations : [])
       .map((v, i) => ({ ...v, __idx: i }))
       .filter((v) => !(v && v.confirmed === true));
-
     if (queue.length === 0) return;
-
     isAlertingViolationRef.current = true;
-
     const showNext = async () => {
       const freshSnap = await getDoc(userRef);
       const fresh = freshSnap.exists() ? freshSnap.data()?.violations || [] : [];
@@ -372,24 +348,20 @@ export default function Map({ user: passedUser }) {
         isAlertingViolationRef.current = false;
         return;
       }
-
       const lat = next?.driverLocation?.latitude ?? next?.driverLocation?.lat ?? null;
       const lng = next?.driverLocation?.longitude ?? next?.driverLocation?.lng ?? null;
       const issuedAtStr = next?.issuedAt?.toDate?.() ? next.issuedAt.toDate().toLocaleString() : "";
-
       let address = null;
       if (typeof lat === "number" && typeof lng === "number") {
         address = await reverseGeocode(lat, lng);
       }
-
       const lines = [
         next?.message || next?.title || next?.code || "Violation",
         issuedAtStr ? `When: ${issuedAtStr}` : null,
         address ? `Location: ${address}` : null,
         Number.isFinite(next?.avgSpeed) ? `Avg speed: ${next.avgSpeed} km/h` : null,
-        Number.isFinite(next?.topSpeed) ? `Top speed: ${next.topSpeed} km/h` : null,
+        Number.isFinite(next?.topSpeed) ? `Top speed: ${next?.topSpeed} km/h` : null,
       ].filter(Boolean);
-
       Alert.alert(
         "Notice of Violation",
         lines.join("\n"),
@@ -418,7 +390,6 @@ export default function Map({ user: passedUser }) {
         { cancelable: false }
       );
     };
-
     showNext();
   }
 
@@ -430,12 +401,9 @@ export default function Map({ user: passedUser }) {
       if (!userSnap.exists()) return;
       const udata = userSnap.data();
       setUserData(udata);
-      setDrivingMode(udata.status === "Delivering");
-
       const arr = Array.isArray(udata.violations) ? udata.violations : [];
       const hasUnconfirmed = arr.some((v) => !(v && v.confirmed === true));
       if (hasUnconfirmed) showViolationsSequentially(userRef, arr);
-
       let allSlowdowns = [];
       if (udata.branchId) {
         const branch = await loadBranchSlowdowns(udata.branchId);
@@ -446,7 +414,6 @@ export default function Map({ user: passedUser }) {
         allSlowdowns = allSlowdowns.concat(crosses);
       }
       setSlowdowns(allSlowdowns);
-
       const parcelList = await loadAllParcels();
       setParcels(parcelList);
     } catch {}
@@ -459,11 +426,63 @@ export default function Map({ user: passedUser }) {
     return "#e74c3c";
   };
 
+  const quickCenterOnUser = async () => {
+    if (!mapRef.current || !location) return;
+    try {
+      const cam = await mapRef.current.getCamera();
+      mapRef.current.animateCamera(
+        {
+          ...cam,
+          center: { latitude: location.latitude, longitude: location.longitude },
+          heading: lastCourseRef.current ?? headingDeg ?? 0,
+          pitch: 50,
+          zoom: Math.max(16, cam?.zoom ?? 10),
+        },
+        { duration: 500 }
+      );
+    } catch {}
+  };
+
+  const fitToHazardsOnce = async () => {
+    if (!mapRef.current || zoomHazardsDoneRef.current) return;
+    if (userData?.status === "Delivering" && parcels.length > 0) return;
+    const pts = [];
+    if (location) pts.push({ latitude: location.latitude, longitude: location.longitude });
+    slowdowns.forEach((s) => {
+      if (s?.location?.lat && s?.location?.lng) {
+        pts.push({ latitude: s.location.lat, longitude: s.location.lng });
+      }
+    });
+    if (pts.length < 2) return;
+    try {
+      mapRef.current.fitToCoordinates(pts, {
+        edgePadding: { top: 80, right: 50, bottom: 120, left: 50 },
+        animated: true,
+      });
+      setTimeout(async () => {
+        try {
+          const cam = await mapRef.current.getCamera?.();
+          const targetZoom = 16;
+          if ((cam?.zoom ?? 0) < targetZoom) {
+            mapRef.current.animateCamera({ ...cam, zoom: targetZoom }, { duration: 400 });
+          }
+        } catch {}
+      }, 600);
+      zoomHazardsDoneRef.current = true;
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (!location) return;
+    if (slowdowns.length === 0) return;
+    fitToHazardsOnce();
+  }, [slowdowns, location]);
+
   if (loading)
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#00b2e1" />
-        <Text style={{ marginTop: 10 }}>Getting current location...</Text>
+        <Text style={{ marginTop: 15 }}>Getting current location...</Text>
       </View>
     );
 
@@ -486,7 +505,7 @@ export default function Map({ user: passedUser }) {
       {etaMinutes != null && distanceKm != null && (
         <View style={[styles.etaPanel, { backgroundColor: getETAColor() }]}>
           <Text style={styles.etaText}>{etaMinutes} min • {distanceKm.toFixed(1)} km</Text>
-          <Text style={styles.etaSubText}>{drivingMode ? "Driving Mode Active" : "Optimized Route"}</Text>
+          <Text style={styles.etaSubText}>Optimized Route</Text>
         </View>
       )}
 
@@ -495,18 +514,21 @@ export default function Map({ user: passedUser }) {
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         showsTraffic
-        compassEnabled
-        showsCompass
+        // compassEnabled
+        // showsCompass
         initialRegion={{
           latitude: location.latitude,
-          longitude: location.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
+          longitude: location.longitude,  
+          latitudeDelta: 0.08,
+          longitudeDelta: 0.08,
         }}
         onMapReady={async () => {
           try {
             const cam = await mapRef.current?.getCamera?.();
-            if (cam?.zoom != null) cameraZoomRef.current = cam.zoom;
+            if (!cam || (cam.zoom ?? 0) < 10) {
+              mapRef.current?.animateCamera({ zoom: 10 }, { duration: 400 });
+            }
+            cameraZoomRef.current = Math.max(12, cam?.zoom ?? 10);
           } catch {}
         }}
       >
@@ -567,7 +589,7 @@ export default function Map({ user: passedUser }) {
                   setTimeout(async () => {
                     try {
                       const cam = await mapRef.current?.getCamera?.();
-                      if (cam?.zoom != null) cameraZoomRef.current = cam.zoom;
+                      if (cam?.zoom != null) cameraZoomRef.current = Math.max(12, cam.zoom);
                     } catch {}
                   }, 600);
                 }
@@ -578,6 +600,29 @@ export default function Map({ user: passedUser }) {
           </>
         ) : null}
       </MapView>
+
+      <View style={styles.followBtn}>
+        <TouchableOpacity
+          style={[styles.followInner, followPuck ? styles.followOn : styles.followOff]}
+          onPress={async () => {
+            const next = !followPuck;
+            setFollowPuck(next);
+            if (next) await quickCenterOnUser();
+          }}
+          activeOpacity={0.85}
+        >
+          <Ionicons
+            name={followPuck ? "navigate" : "navigate-outline"}
+            size={18}
+            color={followPuck ? "#fff" : "#1a73e8"}
+            style={{ marginRight: 6 }}
+          />
+          <Text style={[styles.followText, followPuck ? { color: "#fff" } : { color: "#1a73e8" }]}>
+            {followPuck ? "Follow: ON" : "Follow: OFF"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
 
       {showSlowdownWarning && activeSlowdown && (
         <View style={styles.slowdownAlert}>
@@ -639,6 +684,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     zIndex: 10,
     elevation: 10,
+    backgroundColor: "#1E88E5",
   },
   etaText: { color: "#fff", fontSize: 20, fontWeight: "bold", textAlign: "center" },
   etaSubText: { color: "#e3f2fd", fontSize: 14, textAlign: "center" },
@@ -653,6 +699,49 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 3.5,
+  },
+  centerBtn: {
+    padding: 8,
+    borderRadius: 10,
+    backgroundColor: "#eef4ff",
+    elevation: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+  },
+  followBtn: {
+    position: "absolute",
+    top: 150,
+    right: 12,
+    zIndex: 20,
+  },
+  followInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    elevation: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#dfe7ff",
+  },
+  followOn: {
+    backgroundColor: "#1a73e8",
+    borderColor: "#1a73e8",
+  },
+  followOff: {
+    backgroundColor: "#fff",
+    borderColor: "#1a73e8",
+  },
+  followText: {
+    fontSize: 13,
+    fontWeight: "600",
   },
   slowdownAlert: {
     position: "absolute",
