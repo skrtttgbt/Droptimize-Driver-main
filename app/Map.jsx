@@ -83,6 +83,14 @@ function metersBetween(a, b) {
   return haversine({ lat: a.latitude, lon: a.longitude }, { lat: b.latitude, lon: b.longitude });
 }
 
+function getEffectiveLimit(limit) {
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  if (limit >= 10 && limit <= 20) return limit + 2;
+  if (limit >= 21 && limit <= 30) return limit + 3;
+  if (limit >= 31 && limit <= 40) return limit + 5;
+  return limit;
+}
+
 export default function Map({ user: passedUser }) {
   const [user, setUser] = useState(passedUser || null);
   const [userData, setUserData] = useState(null);
@@ -303,7 +311,7 @@ export default function Map({ user: passedUser }) {
   const loadOverpassCrosswalks = async (lat, lon) => {
     try {
       const queryStr = `[out:json][timeout:25];(node["highway"="crossing"](around:${OVERPASS_RADIUS},${lat},${lon}););out body;`;
-      const data = await fetchOverpass(queryStr);
+    const data = await fetchOverpass(queryStr);
       if (!data || !Array.isArray(data.elements)) return [];
       return data.elements
         .filter((el) => typeof el.lat === "number" && typeof el.lon === "number")
@@ -500,6 +508,7 @@ export default function Map({ user: passedUser }) {
   }));
   const waypoints = destinations.slice(0, -1);
   const finalDestination = destinations[destinations.length - 1];
+  const effectiveLimit = getEffectiveLimit(speedLimit);
 
   return (
     <View style={styles.container}>
@@ -515,11 +524,9 @@ export default function Map({ user: passedUser }) {
         provider={PROVIDER_GOOGLE}
         style={styles.map}
         showsTraffic
-        // compassEnabled
-        // showsCompass
         initialRegion={{
           latitude: location.latitude,
-          longitude: location.longitude,  
+          longitude: location.longitude,
           latitudeDelta: 0.08,
           longitudeDelta: 0.08,
         }}
@@ -624,7 +631,6 @@ export default function Map({ user: passedUser }) {
         </TouchableOpacity>
       </View>
 
-
       {showSlowdownWarning && activeSlowdown && (
         <View style={styles.slowdownAlert}>
           <Ionicons name="warning" size={22} color="#ffcc00" />
@@ -638,15 +644,15 @@ export default function Map({ user: passedUser }) {
         <View style={styles.row}>
           <View style={styles.speedCard}>
             <Text style={styles.label}>Speed Limit</Text>
-            <Text style={[styles.speedValue, { color: "#29bf12" }]}>{speedLimit > 0 ? speedLimit : "No limit"}</Text>
-            {speedLimit > 0 && <Text style={styles.unit}>km/h</Text>}
+            <Text style={[styles.speedValue, { color: "#29bf12" }]}>{effectiveLimit > 0 ? effectiveLimit : "No limit"}</Text>
+            {effectiveLimit > 0 && <Text style={styles.unit}>km/h</Text>}
           </View>
           <View style={styles.speedCard}>
             <Text style={styles.label}>Current Speed</Text>
             <Text
               style={[
                 styles.speedValue,
-                { color: speedLimit > 0 && vehicleSpeed > speedLimit ? "#f21b3f" : "#29bf12" },
+                { color: effectiveLimit > 0 && vehicleSpeed > effectiveLimit ? "#f21b3f" : "#29bf12" },
               ]}
             >
               {vehicleSpeed}
@@ -661,7 +667,7 @@ export default function Map({ user: passedUser }) {
             </View>
           )}
         </View>
-        {speedLimit > 0 && vehicleSpeed > speedLimit && (
+        {effectiveLimit > 0 && vehicleSpeed > effectiveLimit && (
           <View style={styles.warningBox}>
             <Ionicons name="alert-circle" size={20} color="#f21b3f" />
             <Text style={styles.warningText}>You are overspeeding!</Text>
