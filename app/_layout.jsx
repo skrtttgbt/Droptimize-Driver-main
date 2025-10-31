@@ -6,7 +6,7 @@ import * as Speech from "expo-speech";
 import * as SplashScreen from "expo-splash-screen";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from "firebase/firestore";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -22,7 +22,7 @@ import {
 import Navigation from "../components/Navigation";
 import { auth, db } from "../firebaseConfig";
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const logo = require("../assets/images/logo.png");
 const { width } = Dimensions.get("window");
@@ -32,6 +32,8 @@ export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     "LEMONMILK-Bold": require("../assets/fonts/LEMONMILK-Bold.otf"),
   });
+
+  const [appReady, setAppReady] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [initialRoute, setInitialRoute] = useState("Login");
@@ -60,7 +62,9 @@ export default function RootLayout() {
     Animated.timing(slideAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start();
   };
   const closeMenu = () => {
-    Animated.timing(slideAnim, { toValue: -DRAWER_WIDTH, duration: 250, useNativeDriver: true }).start(() => setMenuOpen(false));
+    Animated.timing(slideAnim, { toValue: -DRAWER_WIDTH, duration: 250, useNativeDriver: true }).start(() =>
+      setMenuOpen(false)
+    );
   };
   const BurgerButton = () => (
     <TouchableOpacity onPress={openMenu} style={{ marginLeft: 10 }}>
@@ -69,15 +73,18 @@ export default function RootLayout() {
   );
 
   useEffect(() => {
-    const hideSplash = async () => {
+    if (fontsLoaded || fontError) {
+      setAppReady(true);
+    }
+  }, [fontsLoaded, fontError]);
+
+  const onLayoutRootView = useCallback(async () => {
+    if (appReady) {
       try {
         await SplashScreen.hideAsync();
       } catch {}
-    };
-    if (fontsLoaded || fontError) hideSplash();
-    const timer = setTimeout(() => hideSplash(), 3000);
-    return () => clearTimeout(timer);
-  }, [fontsLoaded, fontError]);
+    }
+  }, [appReady]);
 
   const stopLocationWatch = () => {
     if (locationSubRef.current) {
@@ -95,7 +102,10 @@ export default function RootLayout() {
         return;
       }
       const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const initialSpeedKmh = typeof initial.coords.speed === "number" && isFinite(initial.coords.speed) ? Math.max(0, initial.coords.speed * 3.6) : null;
+      const initialSpeedKmh =
+        typeof initial.coords.speed === "number" && isFinite(initial.coords.speed)
+          ? Math.max(0, initial.coords.speed * 3.6)
+          : null;
 
       await updateDoc(doc(db, "users", uid), {
         location: {
@@ -277,7 +287,7 @@ export default function RootLayout() {
     };
   }, [router]);
 
-  if (!fontsLoaded && !fontError) return null;
+  if (!appReady) return null;
 
   if (loading) {
     return (
@@ -288,7 +298,7 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
+    <SafeAreaView style={{ flex: 1 }} onLayout={onLayoutRootView}>
       <Stack
         initialRouteName={initialRoute}
         screenOptions={{
@@ -308,7 +318,6 @@ export default function RootLayout() {
         <Stack.Screen name="Parcels" options={{ title: "Parcels" }} />
         <Stack.Screen name="Map" options={{ title: "Map" }} />
         <Stack.Screen name="DrivingStats" options={{ title: "Driving Stats" }} />
-        <Stack.Screen name="Settings" options={{ title: "Settings" }} />
       </Stack>
 
       {menuOpen && (
@@ -317,7 +326,13 @@ export default function RootLayout() {
             <View style={styles.overlay} />
           </TouchableWithoutFeedback>
           <Animated.View style={[styles.drawer, { transform: [{ translateX: slideAnim }] }]}>
-            <Navigation userData={userData} onNavigate={(path) => { closeMenu(); router.replace(path); }} />
+            <Navigation
+              userData={userData}
+              onNavigate={(path) => {
+                closeMenu();
+                router.replace(path);
+              }}
+            />
           </Animated.View>
         </>
       )}
@@ -350,4 +365,3 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
   },
 });
-

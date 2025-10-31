@@ -1,10 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs, query, updateDoc, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import haversine from "haversine-distance";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import MapViewDirections from "react-native-maps-directions";
 import Svg, { Polygon } from "react-native-svg";
@@ -342,66 +342,6 @@ export default function Map({ user: passedUser }) {
     }
   };
 
-  async function showViolationsSequentially(userRef, violations) {
-    if (isAlertingViolationRef.current) return;
-    const queue = (Array.isArray(violations) ? violations : [])
-      .map((v, i) => ({ ...v, __idx: i }))
-      .filter((v) => !(v && v.confirmed === true));
-    if (queue.length === 0) return;
-    isAlertingViolationRef.current = true;
-    const showNext = async () => {
-      const freshSnap = await getDoc(userRef);
-      const fresh = freshSnap.exists() ? freshSnap.data()?.violations || [] : [];
-      const next = fresh.map((v, i) => ({ ...v, __idx: i })).find((v) => !(v && v.confirmed === true));
-      if (!next) {
-        isAlertingViolationRef.current = false;
-        return;
-      }
-      const lat = next?.driverLocation?.latitude ?? next?.driverLocation?.lat ?? null;
-      const lng = next?.driverLocation?.longitude ?? next?.driverLocation?.lng ?? null;
-      const issuedAtStr = next?.issuedAt?.toDate?.() ? next.issuedAt.toDate().toLocaleString() : "";
-      let address = null;
-      if (typeof lat === "number" && typeof lng === "number") {
-        address = await reverseGeocode(lat, lng);
-      }
-      const lines = [
-        next?.message || next?.title || next?.code || "Violation",
-        issuedAtStr ? `When: ${issuedAtStr}` : null,
-        address ? `Location: ${address}` : null,
-        Number.isFinite(next?.avgSpeed) ? `Avg speed: ${next.avgSpeed} km/h` : null,
-        Number.isFinite(next?.topSpeed) ? `Top speed: ${next?.topSpeed} km/h` : null,
-      ].filter(Boolean);
-      Alert.alert(
-        "Notice of Violation",
-        lines.join("\n"),
-        [
-          {
-            text: "OK",
-            onPress: async () => {
-              try {
-                const latestSnap = await getDoc(userRef);
-                const arr = latestSnap.exists() ? latestSnap.data()?.violations || [] : [];
-                let markIndex = next.__idx;
-                if (!(arr[markIndex] && arr[markIndex].confirmed !== true)) {
-                  markIndex = arr.findIndex((v) => !(v && v.confirmed === true));
-                }
-                if (markIndex >= 0) {
-                  const updated = arr.map((item, i) => (i === markIndex ? { ...(item || {}), confirmed: true } : item));
-                  await updateDoc(userRef, { violations: updated });
-                }
-                showNext();
-              } catch {
-                isAlertingViolationRef.current = false;
-              }
-            },
-          },
-        ],
-        { cancelable: false }
-      );
-    };
-    showNext();
-  }
-
   const loadEverything = async (coords) => {
     if (!user) return;
     try {
@@ -410,9 +350,6 @@ export default function Map({ user: passedUser }) {
       if (!userSnap.exists()) return;
       const udata = userSnap.data();
       setUserData(udata);
-      const arr = Array.isArray(udata.violations) ? udata.violations : [];
-      const hasUnconfirmed = arr.some((v) => !(v && v.confirmed === true));
-      if (hasUnconfirmed) showViolationsSequentially(userRef, arr);
       let allSlowdowns = [];
       if (udata.branchId) {
         const branch = await loadBranchSlowdowns(udata.branchId);
