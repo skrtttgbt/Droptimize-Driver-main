@@ -42,7 +42,7 @@ export default function ParcelDetailsModal({ visible, parcel, onClose, onUpdateS
 
               <Text style={styles.label}>Address</Text>
               <Text style={styles.value}>
-                {parcel.street}, {parcel.barangay}, {parcel.municipality}, {parcel.province}
+                {parcel.street ? parcel.street+ ", " : "" } {parcel.barangay}, {parcel.municipality}, {parcel.province}
               </Text>
             </View>
 

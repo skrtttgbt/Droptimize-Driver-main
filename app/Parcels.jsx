@@ -196,7 +196,7 @@ export default function Parcels() {
                 </View>
               </View>
               <Text style={styles.parcelText}>
-                {item.street}, {item.barangay}, {item.municipality}, {item.province}
+                {item.street ? item.street + ", ": ""  } {item.barangay}, {item.municipality}, {item.province}
               </Text>
               <Text style={styles.parcelText}>{item.contact}</Text>
             </TouchableOpacity>

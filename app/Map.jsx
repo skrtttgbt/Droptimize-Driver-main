@@ -107,6 +107,13 @@ export default function Map({ user: passedUser }) {
   const [activeSlowdown, setActiveSlowdown] = useState(null);
   const [showSlowdownWarning, setShowSlowdownWarning] = useState(false);
 
+  // NEW: prep/overlay states
+  const [mapReady, setMapReady] = useState(false);
+  const [parcelsLoaded, setParcelsLoaded] = useState(false);
+  const [slowdownsLoaded, setSlowdownsLoaded] = useState(false);
+  const [routeReady, setRouteReady] = useState(true);
+  const firstFreshFixRef = useRef(false);
+
   const mapRef = useRef(null);
   const locationSubscription = useRef(null);
   const headingSubscription = useRef(null);
@@ -116,7 +123,6 @@ export default function Map({ user: passedUser }) {
   const cameraZoomRef = useRef(10);
   const lastCamUpdateRef = useRef(0);
   const routeFitDoneRef = useRef(false);
-  const isAlertingViolationRef = useRef(false);
   const zoomHazardsDoneRef = useRef(false);
 
   const DEFAULT_RADIUS = 15;
@@ -130,32 +136,18 @@ export default function Map({ user: passedUser }) {
     Slippery: "#f44336",
     Default: "#9e9e9e",
   };
-
   async function getInitialPosition() {
     try {
       await Location.hasServicesEnabledAsync();
       const last = await Location.getLastKnownPositionAsync();
-      if (last?.coords) return last;
+      const now = Date.now();
+      const lastIsFresh = last?.timestamp && now - last.timestamp < 20000; 
+      if (last?.coords && lastIsFresh) return last;
       const fresh = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("loc-timeout")), 8000)),
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, maximumAge: 0 }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("loc-timeout")), 10000)),
       ]);
-      return fresh;
-    } catch {
-      return null;
-    }
-  }
-
-  async function reverseGeocode(lat, lng) {
-    try {
-      if (!GOOGLE_MAPS_APIKEY) return null;
-      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_APIKEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.status === "OK" && Array.isArray(data.results) && data.results[0]?.formatted_address) {
-        return data.results[0].formatted_address;
-      }
-      return null;
+      return fresh || last || null;
     } catch {
       return null;
     }
@@ -180,23 +172,28 @@ export default function Map({ user: passedUser }) {
         setLocation(initial.coords);
         prevCoordRef.current = initial.coords;
         prevTimeRef.current = initial.timestamp || Date.now();
-        setLoading(false);
         await loadEverything(initial.coords);
+        setLoading(false);
       } else {
         setLoading(false);
         return;
       }
+
       if (!headingSubscription.current) {
         headingSubscription.current = await Location.watchHeadingAsync((h) => {
           const hdg = Platform.OS === "ios" ? h.trueHeading ?? h.magHeading ?? 0 : h.magHeading ?? h.trueHeading ?? 0;
           if (Number.isFinite(hdg)) setHeadingDeg((prev) => smoothHeading(prev, hdg));
         });
       }
+
       locationSubscription.current = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 800, distanceInterval: 1 },
         async (position) => {
           const coords = position.coords;
           setLocation(coords);
+
+          if (!firstFreshFixRef.current) firstFreshFixRef.current = true;
+
           const gpsKmh = Number.isFinite(coords.speed) ? coords.speed * 3.6 : NaN;
           let derivedKmh = NaN;
           if (prevCoordRef.current && prevTimeRef.current) {
@@ -208,6 +205,7 @@ export default function Map({ user: passedUser }) {
             derivedKmh = (distM / dt) * 3.6;
           }
           let kmh = Number.isFinite(gpsKmh) ? gpsKmh : Number.isFinite(derivedKmh) ? derivedKmh : 0;
+
           const dests = parcels.map((p) => ({ latitude: p.destination.latitude, longitude: p.destination.longitude }));
           let atStop = false;
           if (dests.length > 0) {
@@ -217,6 +215,7 @@ export default function Map({ user: passedUser }) {
           }
           if (kmh < 2 || atStop) kmh = 0;
           setVehicleSpeed(Math.round(kmh));
+
           if (prevCoordRef.current) {
             const moveM = metersBetween(
               { latitude: prevCoordRef.current.latitude, longitude: prevCoordRef.current.longitude },
@@ -231,6 +230,7 @@ export default function Map({ user: passedUser }) {
           }
           prevCoordRef.current = coords;
           prevTimeRef.current = position.timestamp || Date.now();
+
           let nearestLimit = 0;
           let nearbyZone = null;
           slowdowns.forEach((s) => {
@@ -251,6 +251,7 @@ export default function Map({ user: passedUser }) {
               setActiveSlowdown(null);
             }, 7000);
           }
+
           if (mapRef.current && followPuck) {
             const now = Date.now();
             if (now - lastCamUpdateRef.current > 500) {
@@ -311,7 +312,7 @@ export default function Map({ user: passedUser }) {
   const loadOverpassCrosswalks = async (lat, lon) => {
     try {
       const queryStr = `[out:json][timeout:25];(node["highway"="crossing"](around:${OVERPASS_RADIUS},${lat},${lon}););out body;`;
-    const data = await fetchOverpass(queryStr);
+      const data = await fetchOverpass(queryStr);
       if (!data || !Array.isArray(data.elements)) return [];
       return data.elements
         .filter((el) => typeof el.lat === "number" && typeof el.lon === "number")
@@ -350,6 +351,7 @@ export default function Map({ user: passedUser }) {
       if (!userSnap.exists()) return;
       const udata = userSnap.data();
       setUserData(udata);
+
       let allSlowdowns = [];
       if (udata.branchId) {
         const branch = await loadBranchSlowdowns(udata.branchId);
@@ -360,9 +362,15 @@ export default function Map({ user: passedUser }) {
         allSlowdowns = allSlowdowns.concat(crosses);
       }
       setSlowdowns(allSlowdowns);
+      setSlowdownsLoaded(true);
+
       const parcelList = await loadAllParcels();
       setParcels(parcelList);
-    } catch {}
+      setParcelsLoaded(true);
+    } catch {
+      setSlowdownsLoaded(true);
+      setParcelsLoaded(true);
+    }
   };
 
   const getETAColor = () => {
@@ -447,6 +455,14 @@ export default function Map({ user: passedUser }) {
   const finalDestination = destinations[destinations.length - 1];
   const effectiveLimit = getEffectiveLimit(speedLimit);
 
+  const needsRoute = userData?.status === "Delivering" && destinations.length > 0 && !!GOOGLE_MAPS_APIKEY;
+  const preparing =
+    !mapReady ||
+    !firstFreshFixRef.current ||
+    !slowdownsLoaded ||
+    !parcelsLoaded ||
+    (needsRoute && !routeReady);
+
   return (
     <View style={styles.container}>
       {etaMinutes != null && distanceKm != null && (
@@ -475,6 +491,7 @@ export default function Map({ user: passedUser }) {
             }
             cameraZoomRef.current = Math.max(12, cam?.zoom ?? 10);
           } catch {}
+          setMapReady(true);
         }}
       >
         <Marker
@@ -505,7 +522,7 @@ export default function Map({ user: passedUser }) {
           ) : null
         )}
 
-        {userData?.status === "Delivering" && destinations.length > 0 && GOOGLE_MAPS_APIKEY ? (
+        {needsRoute ? (
           <>
             {destinations.map((d, i) => (
               <Marker
@@ -524,6 +541,7 @@ export default function Map({ user: passedUser }) {
               strokeColor="#4285F4"
               optimizeWaypoints
               mode="DRIVING"
+              onStart={() => setRouteReady(false)}
               onReady={async (result) => {
                 if (!routeFitDoneRef.current && mapRef.current) {
                   routeFitDoneRef.current = true;
@@ -540,11 +558,30 @@ export default function Map({ user: passedUser }) {
                 }
                 setEtaMinutes(Math.round(result.duration));
                 setDistanceKm(result.distance);
+                setRouteReady(true);
+              }}
+              onError={() => {
+                setRouteReady(true);
               }}
             />
           </>
         ) : null}
       </MapView>
+
+      {preparing && (
+        <View style={styles.preparingOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color="#00b2e1" />
+          <Text style={styles.preparingText}>
+            {!mapReady
+              ? "Preparing map..."
+              : !firstFreshFixRef.current
+              ? "Waiting for GPS fix..."
+              : needsRoute && !routeReady
+              ? "Building route..."
+              : "Loading..."}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.followBtn}>
         <TouchableOpacity
@@ -743,4 +780,18 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   warningText: { color: "#f21b3f", fontWeight: "600", fontSize: 14, marginLeft: 8 },
+  preparingOverlay: {
+    position: "absolute",
+    top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.7)",
+    zIndex: 25,
+  },
+  preparingText: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#2c3e50",
+  },
 });
