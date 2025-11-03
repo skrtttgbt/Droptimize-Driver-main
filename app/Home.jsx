@@ -13,13 +13,13 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import Dashboard from "../components/DriverDashboard";
 import { auth, db } from "../firebaseConfig";
 
@@ -160,15 +160,14 @@ export default function Home() {
   const hasParcels = deliveries.length > 0;
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={[ 'left', 'right' ]}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={[styles.topSection, { minHeight: screenWidth * 0.6 }]}>
-          <Text style={styles.greeting}>
-            Welcome Back, {userData?.firstName || "Driver"} 👋
-          </Text>
-
           {status === "Offline" && (
             <>
+              <Text style={styles.greeting}>
+                Welcome Back, {userData?.firstName || "Driver"} 👋
+              </Text>
               <Text style={styles.subheading}>Ready to start your shift?</Text>
               <TouchableOpacity
                 style={[styles.startShiftButton, { width: screenWidth * 0.45 }]}
@@ -198,17 +197,23 @@ export default function Home() {
                   Waiting for parcels to be assigned...
                 </Text>
               ) : (
-                <TouchableOpacity
-                  style={[styles.startShiftButton, { width: screenWidth * 0.5 }]}
-                  onPress={handleStartDelivering}
-                  disabled={buttonLoading}
-                >
-                  {buttonLoading ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.startShiftText}>Start Delivering</Text>
-                  )}
-                </TouchableOpacity>
+                <>
+                <Text style={styles.waitText}>
+                    You have {deliveries.length} parcel
+                    {deliveries.length > 1 ? "s" : ""} to deliver.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.startShiftButton, { width: screenWidth * 0.5 }]}
+                    onPress={handleStartDelivering}
+                    disabled={buttonLoading}
+                  >
+                      {buttonLoading ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={styles.startShiftText}>Start Delivering</Text>
+                      )}
+                    </TouchableOpacity>
+                </>
               )}
 
               <TouchableOpacity
@@ -229,7 +234,7 @@ export default function Home() {
             <View style={styles.shiftCard}>
               <Text style={styles.statusLabel}>
                 Status:{" "}
-                <Text style={{ color: "#00b2e1", fontWeight: "bold" }}>
+                <Text style={{ color: "#ff9914", fontWeight: "bold" }}>
                   Delivering
                 </Text>
               </Text>
@@ -283,9 +288,19 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#fff" },
-  scrollContent: { paddingBottom: 20 },
-  loading: { flex: 1, justifyContent: "center", alignItems: "center" },
+  safe: { 
+    flex: 1, 
+    backgroundColor: "#fff",
+    paddingVertical: 0
+  },
+  scrollContent: { 
+    paddingBottom: 20 
+  },
+  loading: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center"
+  },
   topSection: {
     backgroundColor: "#00b2e1",
     padding: 20,
@@ -293,8 +308,16 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
   },
-  greeting: { fontSize: 24, fontWeight: "700", color: "#fff" },
-  subheading: { fontSize: 16, marginTop: 6, color: "#f0f0f0" },
+  greeting: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#fff"
+  },
+  subheading: {
+    fontSize: 16,
+    marginTop: 6,
+    color: "#f0f0f0"
+  },
   startShiftButton: {
     height: 48,
     alignItems: "center",
@@ -307,7 +330,11 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  startShiftText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  startShiftText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff"
+  },
   shiftCard: {
     backgroundColor: "#fff",
     borderRadius: 16,
@@ -326,15 +353,30 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 10,
   },
-  statusLabel: { fontSize: 16, marginBottom: 6, color: "#333" },
-  waitText: { color: "#666", fontStyle: "italic", marginTop: 4 },
+  statusLabel: {
+    fontSize: 16,
+    marginBottom: 6,
+    color: "#333"
+  },
+  waitText: {
+    color: "#666",
+    fontStyle: "italic",
+    marginTop: 4
+  },
   speedCircle: {
     borderWidth: 6,
     justifyContent: "center",
     alignItems: "center",
   },
-  speedValue: { fontSize: 36, fontWeight: "bold", color: "#29bf12" },
-  speedUnit: { fontSize: 14, color: "#555" },
+  speedValue: {
+    fontSize: 36,
+    fontWeight: "bold",
+    color: "#29bf12"
+  },
+  speedUnit: {
+    fontSize: 14,
+    color: "#555"
+  },
   endShiftButton: {
     marginTop: 16,
     height: 44,
@@ -347,20 +389,28 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  endShiftText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  endShiftText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff"
+  },
   cancelButton: {
     marginTop: 10,
     height: 42,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f59e0b",
+    backgroundColor: "#f21b3f",
     borderRadius: 8,
     shadowColor: "#000",
     shadowOpacity: 0.15,
     shadowRadius: 3,
     elevation: 3,
   },
-  cancelText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  cancelText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff"
+  },
   mapButton: {
     marginTop: 14,
     height: 44,
@@ -373,5 +423,9 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  mapButtonText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  mapButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff"
+  },
 });

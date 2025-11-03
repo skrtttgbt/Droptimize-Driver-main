@@ -209,6 +209,7 @@ export default function Profile() {
               setUserData((prev) => ({ ...prev, photoURL: url }))
             }
           />
+          <Text style={styles.sectionTitle}>Personal Information</Text>
 
           <TextInput style={styles.input} value={userData.id} editable={false} />
 
@@ -285,7 +286,7 @@ export default function Profile() {
 
               <TouchableOpacity style={styles.addBtn} onPress={saveRoute}>
                 <Text style={styles.addBtnText}>
-                  {editingIndex !== null ? "💾 Save Route" : "➕ Add Route"}
+                  {editingIndex !== null ? "+ Save Route" : "+ Add Route"}
                 </Text>
               </TouchableOpacity>
             </>
@@ -329,7 +330,7 @@ export default function Profile() {
                 setEditingIndex(null);
               }}
             >
-              <Text style={styles.cancelText}>✖️ Cancel</Text>
+              <Text style={styles.buttonText}>Cancel</Text>
             </TouchableOpacity>
           )}
         </>
@@ -363,7 +364,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   addBtn: {
-    backgroundColor: "#007bff",
+    backgroundColor: "#00b2e1",
     padding: 12,
     borderRadius: 10,
     marginTop: 10,
@@ -394,14 +395,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   editText: {
-    color: "#007bff",
+    color: "#00b2e1",
     marginRight: 15,
   },
   removeText: {
     color: "red",
   },
   button: {
-    backgroundColor: "#28a745",
+    backgroundColor: "#00b2e1",
     padding: 14,
     borderRadius: 12,
     marginTop: 30,
@@ -416,12 +417,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: "#ccc",
-  },
-  cancelText: {
-    textAlign: "center",
-    fontSize: 16,
-    fontWeight: "bold",
+    backgroundColor: "#f21b3f",
   },
 });
 

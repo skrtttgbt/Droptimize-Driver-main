@@ -1,58 +1,84 @@
-import { useRouter } from "expo-router";
-import { onAuthStateChanged } from "firebase/auth";
-import { useEffect, useState } from "react";
+// app/index.jsx
+import { usePathname, useRouter } from "expo-router";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, StyleSheet, View } from "react-native";
-import { auth } from "../firebaseConfig";
+import { auth, db } from "../firebaseConfig";
 
 export default function Index() {
-  const [userChecked, setUserChecked] = useState(false);
-  const [user, setUser] = useState(null);
   const router = useRouter();
+  const pathname = usePathname();          
+  const [loading, setLoading] = useState(true);
 
-  // Wait for auth state
+  const hasNavigatedRef = useRef(false);
+  const ensuredViolationsRef = useRef(false);
+  const mountedRef = useRef(true);
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setUserChecked(true);
+    mountedRef.current = true;
+
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!mountedRef.current) return;
+      if (pathname !== "/") {
+        if (mountedRef.current) setLoading(false);
+        return;
+      }
+
+      const navOnce = (target) => {
+        if (hasNavigatedRef.current) return;
+        hasNavigatedRef.current = true;
+        router.replace(target);
+        if (mountedRef.current) setLoading(false);
+      };
+
+      if (!user) {
+        navOnce("/Login");
+        return;
+      }
+
+      try {
+        const userRef = doc(db, "users", user.uid);
+        const snap = await getDoc(userRef);
+
+        if (!snap.exists()) {
+          try { await signOut(auth); } catch {}
+          navOnce("/Login");
+          return;
+        }
+
+        const data = snap.data() || {};
+        if (typeof data.violations === "undefined" && !ensuredViolationsRef.current) {
+          ensuredViolationsRef.current = true;
+          try { await updateDoc(userRef, { violations: [] }); } catch {}
+        }
+
+        const needsSetup = !data.accountSetupComplete || !data.vehicleSetupComplete;
+        navOnce(needsSetup ? "/AccountSetup" : "/Home");
+      } catch {
+        navOnce("/Login");
+      }
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      mountedRef.current = false;
+      unsub();
+    };
 
-  // Redirect only *after* Firebase has responded and delay is done
-  useEffect(() => {
-    if (userChecked) {
-      const delay = setTimeout(() => {
-        if (user) {
-          router.replace("/Home");
-        } else {
-          router.replace("/Login");
-        }
-      }, 3000); // Splash delay (3s)
+  }, [router]);
 
-      return () => clearTimeout(delay);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userChecked, user]);
-
-  return (
-    <View style={styles.container}>
-      <Image source={require("../assets/images/logo.png")} style={styles.logo} />
-      <ActivityIndicator size="large" color="#00b2e1" />
-    </View>
-  );
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        <Image source={require("../assets/images/logo.png")} style={styles.logo} />
+        <ActivityIndicator size="large" color="#00b2e1" />
+      </View>
+    );
+  }
+  return null;
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#fff",
-  },
-  logo: {
-    width: "80%",
-    height: 200,
-    resizeMode: "contain",
-  },
+  container: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fff" },
+  logo: { width: "80%", height: 200, resizeMode: "contain" },
 });

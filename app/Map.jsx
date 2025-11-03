@@ -106,13 +106,12 @@ export default function Map({ user: passedUser }) {
   const [followPuck, setFollowPuck] = useState(true);
   const [activeSlowdown, setActiveSlowdown] = useState(null);
   const [showSlowdownWarning, setShowSlowdownWarning] = useState(false);
-
-  // NEW: prep/overlay states
   const [mapReady, setMapReady] = useState(false);
   const [parcelsLoaded, setParcelsLoaded] = useState(false);
   const [slowdownsLoaded, setSlowdownsLoaded] = useState(false);
   const [routeReady, setRouteReady] = useState(true);
   const firstFreshFixRef = useRef(false);
+  const [bootDone, setBootDone] = useState(false);
 
   const mapRef = useRef(null);
   const locationSubscription = useRef(null);
@@ -120,10 +119,15 @@ export default function Map({ user: passedUser }) {
   const prevCoordRef = useRef(null);
   const prevTimeRef = useRef(null);
   const lastCourseRef = useRef(null);
-  const cameraZoomRef = useRef(10);
   const lastCamUpdateRef = useRef(0);
   const routeFitDoneRef = useRef(false);
   const zoomHazardsDoneRef = useRef(false);
+
+  const gestureActiveRef = useRef(false);
+  const gestureTimerRef = useRef(null);
+  const userZoomRef = useRef(null);
+  const userPitchRef = useRef(null);
+  const PAUSE_AFTER_GESTURE_MS = 800;
 
   const DEFAULT_RADIUS = 15;
   const OVERPASS_RADIUS = 1000;
@@ -136,12 +140,13 @@ export default function Map({ user: passedUser }) {
     Slippery: "#f44336",
     Default: "#9e9e9e",
   };
+
   async function getInitialPosition() {
     try {
       await Location.hasServicesEnabledAsync();
       const last = await Location.getLastKnownPositionAsync();
       const now = Date.now();
-      const lastIsFresh = last?.timestamp && now - last.timestamp < 20000; 
+      const lastIsFresh = last?.timestamp && now - last.timestamp < 20000;
       if (last?.coords && lastIsFresh) return last;
       const fresh = await Promise.race([
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, maximumAge: 0 }),
@@ -191,7 +196,6 @@ export default function Map({ user: passedUser }) {
         async (position) => {
           const coords = position.coords;
           setLocation(coords);
-
           if (!firstFreshFixRef.current) firstFreshFixRef.current = true;
 
           const gpsKmh = Number.isFinite(coords.speed) ? coords.speed * 3.6 : NaN;
@@ -252,31 +256,21 @@ export default function Map({ user: passedUser }) {
             }, 7000);
           }
 
-          if (mapRef.current && followPuck) {
+          if (mapRef.current && followPuck && !gestureActiveRef.current) {
             const now = Date.now();
             if (now - lastCamUpdateRef.current > 500) {
               lastCamUpdateRef.current = now;
-              if (cameraZoomRef.current == null) {
-                try {
-                  const cam = await mapRef.current.getCamera();
-                  cameraZoomRef.current = cam?.zoom ?? 10;
-                } catch {
-                  cameraZoomRef.current = 10;
-                }
-              }
               const az = (lastCourseRef.current ?? headingDeg ?? 0) * (Math.PI / 180);
               const offsetDistance = 0.0005;
               const offsetLat = coords.latitude + offsetDistance * Math.cos(az);
               const offsetLng = coords.longitude + offsetDistance * Math.sin(az);
-              mapRef.current.animateCamera(
-                {
-                  center: { latitude: offsetLat, longitude: offsetLng },
-                  heading: lastCourseRef.current ?? headingDeg ?? 0,
-                  pitch: 50,
-                  zoom: Math.max(10, cameraZoomRef.current ?? 10),
-                },
-                { duration: 500 }
-              );
+              const camUpdate = {
+                center: { latitude: offsetLat, longitude: offsetLng },
+                heading: lastCourseRef.current ?? headingDeg ?? 0,
+              };
+              if (typeof userZoomRef.current === "number") camUpdate.zoom = userZoomRef.current;
+              if (typeof userPitchRef.current === "number") camUpdate.pitch = userPitchRef.current;
+              mapRef.current.animateCamera(camUpdate, { duration: 500 });
             }
           }
         }
@@ -374,26 +368,32 @@ export default function Map({ user: passedUser }) {
   };
 
   const getETAColor = () => {
-    if (etaMinutes == null) return "#1E88E5";
-    if (etaMinutes < 15) return "#2ecc71";
-    if (etaMinutes < 30) return "#f1c40f";
-    return "#e74c3c";
+    if (etaMinutes == null) return "#0064b5";
+    if (etaMinutes < 15) return "#29bf12";
+    if (etaMinutes < 30) return "#ff9914";
+    return "#f21b3f";
+  };
+
+  const saveCameraState = async () => {
+    try {
+      const cam = await mapRef.current?.getCamera?.();
+      if (cam) {
+        if (typeof cam.zoom === "number") userZoomRef.current = cam.zoom;
+        if (typeof cam.pitch === "number") userPitchRef.current = cam.pitch;
+      }
+    } catch {}
   };
 
   const quickCenterOnUser = async () => {
     if (!mapRef.current || !location) return;
     try {
-      const cam = await mapRef.current.getCamera();
-      mapRef.current.animateCamera(
-        {
-          ...cam,
-          center: { latitude: location.latitude, longitude: location.longitude },
-          heading: lastCourseRef.current ?? headingDeg ?? 0,
-          pitch: 50,
-          zoom: Math.max(16, cam?.zoom ?? 10),
-        },
-        { duration: 500 }
-      );
+      const camUpdate = {
+        center: { latitude: location.latitude, longitude: location.longitude },
+        heading: lastCourseRef.current ?? headingDeg ?? 0,
+      };
+      if (typeof userZoomRef.current === "number") camUpdate.zoom = userZoomRef.current;
+      if (typeof userPitchRef.current === "number") camUpdate.pitch = userPitchRef.current;
+      mapRef.current.animateCamera(camUpdate, { duration: 500 });
     } catch {}
   };
 
@@ -413,15 +413,6 @@ export default function Map({ user: passedUser }) {
         edgePadding: { top: 80, right: 50, bottom: 120, left: 50 },
         animated: true,
       });
-      setTimeout(async () => {
-        try {
-          const cam = await mapRef.current.getCamera?.();
-          const targetZoom = 16;
-          if ((cam?.zoom ?? 0) < targetZoom) {
-            mapRef.current.animateCamera({ ...cam, zoom: targetZoom }, { duration: 400 });
-          }
-        } catch {}
-      }, 600);
       zoomHazardsDoneRef.current = true;
     } catch {}
   };
@@ -431,6 +422,47 @@ export default function Map({ user: passedUser }) {
     if (slowdowns.length === 0) return;
     fitToHazardsOnce();
   }, [slowdowns, location]);
+
+  const needsRoute = userData?.status === "Delivering" && parcels.length > 0 && !!GOOGLE_MAPS_APIKEY;
+  useEffect(() => {
+    if (bootDone) return;
+    const ready =
+      mapReady &&
+      firstFreshFixRef.current &&
+      slowdownsLoaded &&
+      parcelsLoaded &&
+      (!needsRoute || routeReady);
+    if (ready) setBootDone(true);
+  }, [bootDone, mapReady, slowdownsLoaded, parcelsLoaded, routeReady, needsRoute]);
+
+  const preparingMsg =
+    !mapReady
+      ? "Preparing map..."
+      : !firstFreshFixRef.current
+      ? "Waiting for GPS fix..."
+      : !slowdownsLoaded
+      ? "Loading hazard zones..."
+      : !parcelsLoaded
+      ? "Loading parcels..."
+      : needsRoute && !routeReady
+      ? "Building route..."
+      : "";
+
+  const showBootOverlay = !bootDone && !!preparingMsg;
+
+  const beginGesture = async () => {
+    gestureActiveRef.current = true;
+    if (gestureTimerRef.current) clearTimeout(gestureTimerRef.current);
+    await saveCameraState();
+  };
+
+  const endGestureSoon = async () => {
+    if (gestureTimerRef.current) clearTimeout(gestureTimerRef.current);
+    await saveCameraState();
+    gestureTimerRef.current = setTimeout(() => {
+      gestureActiveRef.current = false;
+    }, PAUSE_AFTER_GESTURE_MS);
+  };
 
   if (loading)
     return (
@@ -455,14 +487,6 @@ export default function Map({ user: passedUser }) {
   const finalDestination = destinations[destinations.length - 1];
   const effectiveLimit = getEffectiveLimit(speedLimit);
 
-  const needsRoute = userData?.status === "Delivering" && destinations.length > 0 && !!GOOGLE_MAPS_APIKEY;
-  const preparing =
-    !mapReady ||
-    !firstFreshFixRef.current ||
-    !slowdownsLoaded ||
-    !parcelsLoaded ||
-    (needsRoute && !routeReady);
-
   return (
     <View style={styles.container}>
       {etaMinutes != null && distanceKm != null && (
@@ -483,15 +507,12 @@ export default function Map({ user: passedUser }) {
           latitudeDelta: 0.08,
           longitudeDelta: 0.08,
         }}
-        onMapReady={async () => {
-          try {
-            const cam = await mapRef.current?.getCamera?.();
-            if (!cam || (cam.zoom ?? 0) < 10) {
-              mapRef.current?.animateCamera({ zoom: 10 }, { duration: 400 });
-            }
-            cameraZoomRef.current = Math.max(12, cam?.zoom ?? 10);
-          } catch {}
-          setMapReady(true);
+        onMapReady={() => setMapReady(true)}
+        onTouchStart={beginGesture}
+        onTouchEnd={endGestureSoon}
+        onPanDrag={beginGesture}
+        onRegionChangeComplete={(_, details) => {
+          if (details?.isGesture) endGestureSoon();
         }}
       >
         <Marker
@@ -503,7 +524,7 @@ export default function Map({ user: passedUser }) {
           <View style={styles.puck}>
             <View style={{ transform: [{ rotate: `${Number.isFinite(headingDeg) ? headingDeg : 0}deg` }] }}>
               <Svg width={22} height={22} viewBox="0 0 24 24">
-                <Polygon points="12,2 5,22 12,18 19,22" fill="#1a73e8" />
+                <Polygon points="12,2 5,22 12,18 19,22" fill="#00b2e1" />
               </Svg>
             </View>
           </View>
@@ -522,7 +543,7 @@ export default function Map({ user: passedUser }) {
           ) : null
         )}
 
-        {needsRoute ? (
+        {userData?.status === "Delivering" && destinations.length > 0 && !!GOOGLE_MAPS_APIKEY ? (
           <>
             {destinations.map((d, i) => (
               <Marker
@@ -549,37 +570,21 @@ export default function Map({ user: passedUser }) {
                     edgePadding: { top: 80, right: 50, bottom: 120, left: 50 },
                     animated: true,
                   });
-                  setTimeout(async () => {
-                    try {
-                      const cam = await mapRef.current?.getCamera?.();
-                      if (cam?.zoom != null) cameraZoomRef.current = Math.max(12, cam.zoom);
-                    } catch {}
-                  }, 600);
                 }
                 setEtaMinutes(Math.round(result.duration));
                 setDistanceKm(result.distance);
                 setRouteReady(true);
               }}
-              onError={() => {
-                setRouteReady(true);
-              }}
+              onError={() => setRouteReady(true)}
             />
           </>
         ) : null}
       </MapView>
 
-      {preparing && (
+      {showBootOverlay && (
         <View style={styles.preparingOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color="#00b2e1" />
-          <Text style={styles.preparingText}>
-            {!mapReady
-              ? "Preparing map..."
-              : !firstFreshFixRef.current
-              ? "Waiting for GPS fix..."
-              : needsRoute && !routeReady
-              ? "Building route..."
-              : "Loading..."}
-          </Text>
+          <Text style={styles.preparingText}>{preparingMsg}</Text>
         </View>
       )}
 
@@ -589,17 +594,20 @@ export default function Map({ user: passedUser }) {
           onPress={async () => {
             const next = !followPuck;
             setFollowPuck(next);
-            if (next) await quickCenterOnUser();
+            if (next) {
+              await saveCameraState();
+              await quickCenterOnUser();
+            }
           }}
           activeOpacity={0.85}
         >
           <Ionicons
             name={followPuck ? "navigate" : "navigate-outline"}
             size={18}
-            color={followPuck ? "#fff" : "#1a73e8"}
+            color={followPuck ? "#fff" : "#0064b5"}
             style={{ marginRight: 6 }}
           />
-          <Text style={[styles.followText, followPuck ? { color: "#fff" } : { color: "#1a73e8" }]}>
+          <Text style={[styles.followText, followPuck ? { color: "#fff" } : { color: "#0064b5" }]}>
             {followPuck ? "Follow: ON" : "Follow: OFF"}
           </Text>
         </TouchableOpacity>
@@ -616,16 +624,18 @@ export default function Map({ user: passedUser }) {
 
       <View style={styles.infoPanel}>
         <View style={styles.row}>
-          <View style={styles.speedCard}>
+          <View style={styles.infoCard}>
             <Text style={styles.label}>Speed Limit</Text>
-            <Text style={[styles.speedValue, { color: "#29bf12" }]}>{effectiveLimit > 0 ? effectiveLimit : "No limit"}</Text>
+            <Text style={[styles.infoValue, { color: effectiveLimit > 0 ? "#f21b3f" : "#29bf12" }]}>
+              {effectiveLimit > 0 ? effectiveLimit : "No Limit"}
+            </Text>
             {effectiveLimit > 0 && <Text style={styles.unit}>km/h</Text>}
           </View>
-          <View style={styles.speedCard}>
+          <View style={styles.infoCard}>
             <Text style={styles.label}>Current Speed</Text>
             <Text
               style={[
-                styles.speedValue,
+                styles.infoValue,
                 { color: effectiveLimit > 0 && vehicleSpeed > effectiveLimit ? "#f21b3f" : "#29bf12" },
               ]}
             >
@@ -633,10 +643,12 @@ export default function Map({ user: passedUser }) {
             </Text>
             <Text style={styles.unit}>km/h</Text>
           </View>
+        </View>
+        <View style={styles.row}>
           {etaMinutes != null && (
-            <View style={styles.speedCard}>
+            <View style={styles.infoCard}>
               <Text style={styles.label}>ETA</Text>
-              <Text style={styles.speedValue}>{etaMinutes} min</Text>
+              <Text style={styles.infoValue}>{etaMinutes} min</Text>
               <Text style={styles.unit}>Estimated</Text>
             </View>
           )}
@@ -665,7 +677,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     zIndex: 10,
     elevation: 10,
-    backgroundColor: "#1E88E5",
+    backgroundColor: "#0064b5",
   },
   etaText: { color: "#fff", fontSize: 20, fontWeight: "bold", textAlign: "center" },
   etaSubText: { color: "#e3f2fd", fontSize: 14, textAlign: "center" },
@@ -691,42 +703,23 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
   },
-  followBtn: {
-    position: "absolute",
-    top: 150,
-    right: 12,
-    zIndex: 20,
-  },
+  followBtn: { position: "absolute", bottom: 220, right: 12, zIndex: 20 },
   followInner: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 12,
-    elevation: 6,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
     backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: "#dfe7ff",
   },
-  followOn: {
-    backgroundColor: "#1a73e8",
-    borderColor: "#1a73e8",
-  },
-  followOff: {
-    backgroundColor: "#fff",
-    borderColor: "#1a73e8",
-  },
-  followText: {
-    fontSize: 13,
-    fontWeight: "600",
-  },
+  followOn: { backgroundColor: "#0064b5", borderColor: "#0064b5" },
+  followOff: { backgroundColor: "#fff", borderColor: "#0064b5" },
+  followText: { fontSize: 13, fontWeight: "600" },
   slowdownAlert: {
     position: "absolute",
-    bottom: 170,
+    top: 20,
     left: 20,
     right: 20,
     backgroundColor: "#fff3cd",
@@ -743,6 +736,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 5,
+    zIndex: 15,
   },
   slowdownText: {
     flex: 1,
@@ -766,10 +760,10 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 5,
   },
-  row: { flexDirection: "row", justifyContent: "space-around", marginBottom: 16 },
-  speedCard: { alignItems: "center", flex: 1 },
+  row: { flexDirection: "row", justifyContent: "space-around", marginBottom: 12 },
+  infoCard: { alignItems: "center", flex: 1 },
   label: { fontSize: 14, color: "#777", marginBottom: 4 },
-  speedValue: { fontSize: 32, fontWeight: "bold" },
+  infoValue: { fontSize: 24, fontWeight: "bold" },
   unit: { fontSize: 12, color: "#555" },
   warningBox: {
     flexDirection: "row",
@@ -788,10 +782,5 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.7)",
     zIndex: 25,
   },
-  preparingText: {
-    marginTop: 10,
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#2c3e50",
-  },
+  preparingText: { marginTop: 10, fontSize: 16, fontWeight: "600", color: "#2c3e50" },
 });

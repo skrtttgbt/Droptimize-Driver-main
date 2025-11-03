@@ -72,10 +72,6 @@ export default function Navigation({ onNavigate }) {
         <TouchableOpacity onPress={() => handleNavigate("/DrivingStats")}>
           <Text style={styles.menuItem}>Driving Stats</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity onPress={() => handleNavigate("/Settings")}>
-          <Text style={styles.menuItem}>Settings</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Bottom buttons */}

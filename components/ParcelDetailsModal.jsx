@@ -38,7 +38,7 @@ export default function ParcelDetailsModal({ visible, parcel, onClose, onUpdateS
               <Text style={styles.value}>{parcel.recipient}</Text>
 
               <Text style={styles.label}>Contact</Text>
-              <Text style={styles.value}>{parcel.contact}</Text>
+              <Text style={styles.value}>{parcel.recipientContact}</Text>
 
               <Text style={styles.label}>Address</Text>
               <Text style={styles.value}>
@@ -132,7 +132,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 16,
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 0,
+    paddingBottom: 20,
   },
   title: {
     fontSize: 18,

@@ -13,7 +13,7 @@ import { auth, db } from "../firebaseConfig";
 
 export default function DrivingStats() {
   const [selectedTab, setSelectedTab] = useState("all");
-  const [expandedDate, setExpandedDate] = useState(null);
+  const [expandedIndex, setExpandedIndex] = useState(null);
   const [drivingData, setDrivingData] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -31,15 +31,15 @@ export default function DrivingStats() {
       userRef,
       (snapshot) => {
         const data = snapshot.data();
-        if (data?.warnings && Array.isArray(data.warnings)) {
-          setDrivingData(data.warnings);
+        if (data?.violations && Array.isArray(data.violations)) {
+          setDrivingData(data.violations);
         } else {
           setDrivingData([]);
         }
         setLoading(false);
       },
       (error) => {
-        console.error("Error fetching user warnings:", error);
+        console.error("Error fetching user violations:", error);
         Alert.alert("Error", "Failed to load driving stats.");
         setLoading(false);
       }
@@ -48,8 +48,8 @@ export default function DrivingStats() {
     return () => unsubscribe();
   }, []);
 
-  const overspeedingHistory = drivingData.filter(
-    (h) => h.overspeeding && h.overspeeding.length > 0
+  const overspeedingHistory = drivingData.filter((v) =>
+    String(v.message ?? "").toLowerCase().includes("speed")
   );
 
   const dataToShow = selectedTab === "all" ? drivingData : overspeedingHistory;
@@ -65,6 +65,7 @@ export default function DrivingStats() {
 
   return (
     <View style={styles.container}>
+
       {/* Tabs */}
       <View style={styles.tabContainer}>
         <TouchableOpacity
@@ -74,7 +75,7 @@ export default function DrivingStats() {
           ]}
           onPress={() => {
             setSelectedTab("all");
-            setExpandedDate(null);
+            setExpandedIndex(null);
           }}
         >
           <Text
@@ -97,7 +98,7 @@ export default function DrivingStats() {
           ]}
           onPress={() => {
             setSelectedTab("overspeeding");
-            setExpandedDate(null);
+            setExpandedIndex(null);
           }}
         >
           <Text
@@ -111,7 +112,7 @@ export default function DrivingStats() {
         </TouchableOpacity>
       </View>
 
-      {/* Driving History */}
+      {/* Driving Violations */}
       {dataToShow.length === 0 ? (
         <Text style={{ textAlign: "center", marginTop: 20, color: "#777" }}>
           No driving records found.
@@ -119,55 +120,54 @@ export default function DrivingStats() {
       ) : (
         <FlatList
           data={dataToShow}
-          keyExtractor={(item, index) => `${item.date}-${index}`}
-          renderItem={({ item }) => (
+          keyExtractor={(_, index) => index.toString()}
+          renderItem={({ item, index }) => (
             <TouchableOpacity
               style={styles.historyCard}
               onPress={() =>
-                setExpandedDate(expandedDate === item.date ? null : item.date)
+                setExpandedIndex(expandedIndex === index ? null : index)
               }
             >
+              {/* Header */}
               <View style={styles.cardHeader}>
-                <Text style={styles.dateText}>{item.date}</Text>
-                {item.overspeeding?.length > 0 && (
+                <Text style={styles.dateText}>
+                  {item.issuedAt?.seconds
+                    ? new Date(item.issuedAt.seconds * 1000).toLocaleString()
+                    : "No timestamp"}
+                </Text>
+                {String(item.message ?? "").toLowerCase().includes("speed") && (
                   <View style={styles.badge}>
-                    <Text style={styles.badgeText}>
-                      {item.overspeeding.length}x Overspeeding
-                    </Text>
+                    <Text style={styles.badgeText}>Overspeeding</Text>
                   </View>
                 )}
               </View>
 
-              {expandedDate !== item.date && (
+              {/* Summary */}
+              {expandedIndex !== index && (
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryText}>
-                    Distance: {item.distance}
+                    Avg: {item.avgSpeed ?? "—"} km/h
                   </Text>
                   <Text style={styles.summaryText}>
-                    Top: {item.topSpeed}
+                    Top: {item.topSpeed ?? "—"} km/h
                   </Text>
                 </View>
               )}
 
-              {expandedDate === item.date && (
+              {/* Expanded Details */}
+              {expandedIndex === index && (
                 <View style={styles.details}>
-                  <Text style={styles.sectionTitle}>Stats</Text>
-                  <Text>Distance: {item.distance}</Text>
-                  <Text>Avg Speed: {item.avgSpeed}</Text>
-                  <Text>Top Speed: {item.topSpeed}</Text>
-                  <Text>Time: {item.time}</Text>
-
-                  {item.overspeeding?.length > 0 && (
-                    <View style={{ marginTop: 10 }}>
-                      <Text style={styles.sectionTitle}>
-                        Overspeeding Instances
-                      </Text>
-                      {item.overspeeding.map((o, i) => (
-                        <Text key={`${item.date}-os-${i}`}>
-                          • {o.location} — {o.speed}
-                        </Text>
-                      ))}
-                    </View>
+                  <Text style={styles.sectionTitle}>Details</Text>
+                  <Text>Message: {item.message ?? "—"}</Text>
+                  <Text>Average Speed: {item.avgSpeed ?? "—"} km/h</Text>
+                  <Text>Top Speed: {item.topSpeed ?? "—"} km/h</Text>
+                  <Text>Distance: {item.distance ?? "—"} km</Text>
+                  <Text>Time: {item.time ?? "—"} mins</Text>
+                  {item.driverLocation && (
+                    <Text>
+                      Location: {item.driverLocation.latitude},{" "}
+                      {item.driverLocation.longitude}
+                    </Text>
                   )}
                 </View>
               )}
@@ -180,7 +180,11 @@ export default function DrivingStats() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff", padding: 10 },
+  container: {
+    flex: 1,
+    backgroundColor: "#fff",
+    padding: 10,
+  },
   tabContainer: {
     flexDirection: "row",
     borderRadius: 8,
@@ -210,14 +214,21 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  dateText: { fontSize: 16, fontWeight: "bold" },
+  dateText: {
+    fontSize: 16,
+    fontWeight: "bold",
+  },
   badge: {
     backgroundColor: "#f21b3f",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
   },
-  badgeText: { color: "#fff", fontWeight: "bold", fontSize: 12 },
+  badgeText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 12,
+  },
   summaryRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -228,11 +239,13 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: "#555",
   },
-  details: { marginTop: 10 },
+  details: {
+    marginTop: 10,
+  },
   sectionTitle: {
     fontWeight: "700",
     fontSize: 14,
     marginBottom: 4,
-    color: "#29bf12",
+    color: "#00b2e1",
   },
 });
