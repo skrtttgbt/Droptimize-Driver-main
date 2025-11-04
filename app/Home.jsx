@@ -1,3 +1,4 @@
+import * as Location from "expo-location";
 import { router } from "expo-router";
 import {
   collection,
@@ -29,14 +30,11 @@ export default function Home() {
   const [userData, setUserData] = useState(null);
   const [deliveries, setDeliveries] = useState([]);
   const [nextDelivery, setNextDelivery] = useState(null);
-
-  // Live driving telemetry (no speed limit)
   const [speed, setSpeed] = useState(0);
-
+  const [location, setLocation] = useState(null);
   const { width: screenWidth } = Dimensions.get("window");
   const user = auth.currentUser;
 
-  // Initial load (user + parcels)
   useEffect(() => {
     const init = async () => {
       if (!user) return;
@@ -45,12 +43,10 @@ export default function Home() {
         const userSnap = await getDoc(doc(db, "users", user.uid));
         const data = userSnap.data();
         setUserData(data);
-
         if (!data?.preferredRoutes || data.preferredRoutes.length === 0) {
           router.replace("/PreferredRoutesSetup");
           return;
         }
-
         await fetchParcels(data);
       } catch (err) {
         console.error("Error initializing:", err);
@@ -61,30 +57,48 @@ export default function Home() {
     init();
   }, [user]);
 
-  // Subscribe to live user doc for speed (and status)
   useEffect(() => {
     if (!user) return;
     const ref = doc(db, "users", user.uid);
-    const unsub = onSnapshot(
-      ref,
-      (snap) => {
-        if (!snap.exists()) return;
-        const d = snap.data();
-        setUserData(d);
-
-        // Current speed from Expo updater (km/h)
-        const liveKmh =
-          typeof d?.location?.speedKmh === "number" && isFinite(d.location.speedKmh)
-            ? Math.round(d.location.speedKmh)
-            : typeof d?.speed === "number" && isFinite(d.speed)
-            ? Math.round(d.speed)
-            : 0;
-        setSpeed(liveKmh);
-      },
-      (err) => console.warn("Home user onSnapshot error:", err)
-    );
+    const unsub = onSnapshot(ref, (snap) => {
+      if (!snap.exists()) return;
+      const d = snap.data();
+      setUserData(d);
+    });
     return () => unsub();
   }, [user]);
+
+  useEffect(() => {
+    let locationSub;
+    const startTracking = async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") return;
+      locationSub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.Highest, distanceInterval: 1 },
+        (pos) => {
+          const kmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+          setSpeed(kmh);
+          setLocation({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+          if (user) {
+            updateDoc(doc(db, "users", user.uid), {
+              location: {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                speedKmh: kmh,
+              },
+            });
+          }
+        }
+      );
+    };
+    if (userData?.status === "Delivering") startTracking();
+    return () => {
+      if (locationSub) locationSub.remove();
+    };
+  }, [userData?.status]);
 
   const fetchParcels = async (data) => {
     if (!user) return;
@@ -96,7 +110,6 @@ export default function Home() {
     const snapshot = await getDocs(q);
     const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     setDeliveries(list);
-
     if (data?.preferredRoutes && list.length > 0) {
       const ordered = list.sort((a, b) => {
         const aIndex = data.preferredRoutes.indexOf(a.municipality);
@@ -143,7 +156,6 @@ export default function Home() {
     setNextDelivery(null);
   };
 
-  // Cancel in Available state
   const handleCancelShift = async () => {
     await handleEndShift();
   };
@@ -160,7 +172,7 @@ export default function Home() {
   const hasParcels = deliveries.length > 0;
 
   return (
-    <SafeAreaView style={styles.safe} edges={[ 'left', 'right' ]}>
+    <SafeAreaView style={styles.safe} edges={["left", "right"]}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={[styles.topSection, { minHeight: screenWidth * 0.6 }]}>
           {status === "Offline" && (
@@ -191,14 +203,13 @@ export default function Home() {
                   Available
                 </Text>
               </Text>
-
               {!hasParcels ? (
                 <Text style={styles.waitText}>
                   Waiting for parcels to be assigned...
                 </Text>
               ) : (
                 <>
-                <Text style={styles.waitText}>
+                  <Text style={styles.waitText}>
                     You have {deliveries.length} parcel
                     {deliveries.length > 1 ? "s" : ""} to deliver.
                   </Text>
@@ -207,15 +218,14 @@ export default function Home() {
                     onPress={handleStartDelivering}
                     disabled={buttonLoading}
                   >
-                      {buttonLoading ? (
-                        <ActivityIndicator color="#fff" />
-                      ) : (
-                        <Text style={styles.startShiftText}>Start Delivering</Text>
-                      )}
-                    </TouchableOpacity>
+                    {buttonLoading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.startShiftText}>Start Delivering</Text>
+                    )}
+                  </TouchableOpacity>
                 </>
               )}
-
               <TouchableOpacity
                 style={[styles.cancelButton, { width: screenWidth * 0.4 }]}
                 onPress={handleCancelShift}
@@ -238,7 +248,6 @@ export default function Home() {
                   Delivering
                 </Text>
               </Text>
-
               <View
                 style={[
                   styles.speedCircle,
@@ -253,15 +262,12 @@ export default function Home() {
                 <Text style={styles.speedValue}>{speed}</Text>
                 <Text style={styles.speedUnit}>km/h</Text>
               </View>
-
-              {/* Go to Map button when Delivering */}
               <TouchableOpacity
                 style={[styles.mapButton, { width: screenWidth * 0.5 }]}
                 onPress={() => router.push("/Map")}
               >
                 <Text style={styles.mapButtonText}>Go to Map</Text>
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={[styles.endShiftButton, { width: screenWidth * 0.4 }]}
                 onPress={handleEndShift}
@@ -276,7 +282,6 @@ export default function Home() {
             </View>
           )}
         </View>
-
         <Dashboard
           shiftStarted={status === "Delivering"}
           deliveries={deliveries}
@@ -288,19 +293,9 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  safe: { 
-    flex: 1, 
-    backgroundColor: "#fff",
-    paddingVertical: 0
-  },
-  scrollContent: { 
-    paddingBottom: 20 
-  },
-  loading: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center"
-  },
+  safe: { flex: 1, backgroundColor: "#fff", paddingVertical: 0 },
+  scrollContent: { paddingBottom: 20 },
+  loading: { flex: 1, justifyContent: "center", alignItems: "center" },
   topSection: {
     backgroundColor: "#00b2e1",
     padding: 20,
@@ -308,16 +303,8 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 20,
     borderBottomRightRadius: 20,
   },
-  greeting: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#fff"
-  },
-  subheading: {
-    fontSize: 16,
-    marginTop: 6,
-    color: "#f0f0f0"
-  },
+  greeting: { fontSize: 24, fontWeight: "700", color: "#fff" },
+  subheading: { fontSize: 16, marginTop: 6, color: "#f0f0f0" },
   startShiftButton: {
     height: 48,
     alignItems: "center",
@@ -330,11 +317,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  startShiftText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff"
-  },
+  startShiftText: { fontSize: 16, fontWeight: "600", color: "#fff" },
   shiftCard: {
     backgroundColor: "#fff",
     borderRadius: 16,
@@ -353,30 +336,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 10,
   },
-  statusLabel: {
-    fontSize: 16,
-    marginBottom: 6,
-    color: "#333"
-  },
-  waitText: {
-    color: "#666",
-    fontStyle: "italic",
-    marginTop: 4
-  },
+  statusLabel: { fontSize: 16, marginBottom: 6, color: "#333" },
+  waitText: { color: "#666", fontStyle: "italic", marginTop: 4 },
   speedCircle: {
     borderWidth: 6,
     justifyContent: "center",
     alignItems: "center",
   },
-  speedValue: {
-    fontSize: 36,
-    fontWeight: "bold",
-    color: "#29bf12"
-  },
-  speedUnit: {
-    fontSize: 14,
-    color: "#555"
-  },
+  speedValue: { fontSize: 36, fontWeight: "bold", color: "#29bf12" },
+  speedUnit: { fontSize: 14, color: "#555" },
   endShiftButton: {
     marginTop: 16,
     height: 44,
@@ -389,11 +357,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  endShiftText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff"
-  },
+  endShiftText: { fontSize: 16, fontWeight: "600", color: "#fff" },
   cancelButton: {
     marginTop: 10,
     height: 42,
@@ -406,11 +370,7 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 3,
   },
-  cancelText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff"
-  },
+  cancelText: { fontSize: 16, fontWeight: "600", color: "#fff" },
   mapButton: {
     marginTop: 14,
     height: 44,
@@ -423,9 +383,5 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  mapButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff"
-  },
+  mapButtonText: { fontSize: 16, fontWeight: "600", color: "#fff" },
 });

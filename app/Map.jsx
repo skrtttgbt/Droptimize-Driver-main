@@ -11,7 +11,11 @@ import Svg, { Polygon } from "react-native-svg";
 import { auth, db } from "../firebaseConfig";
 
 const GOOGLE_MAPS_APIKEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || "";
-
+const VIOLATION_COOLDOWN_MS = 60000;
+const DEFAULT_SPEED_LIMIT = 80;
+const CROSSWALK_LIMIT = 25;
+const DEFAULT_RADIUS = 15;
+const OVERPASS_RADIUS = 1000;
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
@@ -424,6 +428,83 @@ export default function Map({ user: passedUser }) {
   }, [slowdowns, location]);
 
   const needsRoute = userData?.status === "Delivering" && parcels.length > 0 && !!GOOGLE_MAPS_APIKEY;
+    useEffect(() => {
+    if (!user) return;
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setLoading(false);
+        return;
+      }
+      const initial = await getInitialPosition();
+      if (initial?.coords) {
+        setLocation(initial.coords);
+        prevCoordRef.current = initial.coords;
+        prevTimeRef.current = initial.timestamp || Date.now();
+        await loadEverything(initial.coords);
+        setLoading(false);
+      } else {
+        setLoading(false);
+        return;
+      }
+      if (!headingSubscription.current) {
+        headingSubscription.current = await Location.watchHeadingAsync((h) => {
+          const hdg = Platform.OS === "ios" ? h.trueHeading ?? h.magHeading ?? 0 : h.magHeading ?? h.trueHeading ?? 0;
+          if (Number.isFinite(hdg)) setHeadingDeg((prev) => smoothHeading(prev, hdg));
+        });
+      }
+      locationSubscription.current = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 800, distanceInterval: 1 },
+        async (position) => {
+          const coords = position.coords;
+          setLocation(coords);
+          const gpsKmh = Number.isFinite(coords.speed) ? coords.speed * 3.6 : NaN;
+          let derivedKmh = NaN;
+          if (prevCoordRef.current && prevTimeRef.current) {
+            const distM = metersBetween(
+              { latitude: prevCoordRef.current.latitude, longitude: prevCoordRef.current.longitude },
+              { latitude: coords.latitude, longitude: coords.longitude }
+            );
+            const dt = Math.max(0.5, (position.timestamp - prevTimeRef.current) / 1000);
+            derivedKmh = (distM / dt) * 3.6;
+          }
+          let kmh = Number.isFinite(gpsKmh) ? gpsKmh : Number.isFinite(derivedKmh) ? derivedKmh : 0;
+          if (kmh < 2) kmh = 0;
+          setVehicleSpeed(Math.round(kmh));
+          prevCoordRef.current = coords;
+          prevTimeRef.current = position.timestamp || Date.now();
+
+          let nearestLimit = DEFAULT_SPEED_LIMIT;
+          let zoneId = "default";
+          slowdowns.forEach((s) => {
+            if (!s.location?.lat || !s.location?.lng) return;
+            const dist = metersBetween(coords, { latitude: s.location.lat, longitude: s.location.lng });
+            const zoneRadius = s.radius || DEFAULT_RADIUS;
+            if (dist < zoneRadius) {
+              nearestLimit = s.speedLimit || nearestLimit;
+              zoneId = s.id || "zone";
+            }
+          });
+          setSpeedLimit(nearestLimit);
+          const now = Date.now();
+          if (kmh > nearestLimit) {
+            if (now - lastViolationTimeRef.current > VIOLATION_COOLDOWN_MS || lastViolationZoneRef.current !== zoneId) {
+              lastViolationTimeRef.current = now;
+              lastViolationZoneRef.current = zoneId;
+              Alert.alert("Speeding Alert", `You are exceeding the ${nearestLimit} km/h limit!`, [{ text: "OK" }], { cancelable: true });
+            }
+          }
+        }
+      );
+    })();
+    return () => {
+      locationSubscription.current?.remove?.();
+      locationSubscription.current = null;
+      headingSubscription.current?.remove?.();
+      headingSubscription.current = null;
+    };
+  }, [user, slowdowns]);
+  
   useEffect(() => {
     if (bootDone) return;
     const ready =
@@ -626,10 +707,10 @@ export default function Map({ user: passedUser }) {
         <View style={styles.row}>
           <View style={styles.infoCard}>
             <Text style={styles.label}>Speed Limit</Text>
-            <Text style={[styles.infoValue, { color: effectiveLimit > 0 ? "#f21b3f" : "#29bf12" }]}>
-              {effectiveLimit > 0 ? effectiveLimit : "No Limit"}
+            <Text style={[styles.infoValue, { color: "#f21b3f" }]}>
+              {effectiveLimit > 0 ? effectiveLimit : "80"}
             </Text>
-            {effectiveLimit > 0 && <Text style={styles.unit}>km/h</Text>}
+           <Text style={styles.unit}>km/h</Text>
           </View>
           <View style={styles.infoCard}>
             <Text style={styles.label}>Current Speed</Text>

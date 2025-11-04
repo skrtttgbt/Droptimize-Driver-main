@@ -1,4 +1,3 @@
-// app/index.jsx
 import { usePathname, useRouter } from "expo-router";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
